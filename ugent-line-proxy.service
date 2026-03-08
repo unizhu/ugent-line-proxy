@@ -1,0 +1,26 @@
+[Unit]
+Description=UGENT LINE Proxy Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=ugent-line-proxy
+Group=ugent-line-proxy
+WorkingDirectory=/var/lib/ugent-line-proxy
+EnvironmentFile=/etc/ugent-line-proxy/.env
+ExecStart=/usr/bin/ugent-line-proxy
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ugent-line-proxy /var/log/ugent-line-proxy
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

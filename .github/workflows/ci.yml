@@ -1,0 +1,239 @@
+name: CI / Release
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Check if we should run CI or Release
+  check-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      run_linux: ${{ steps.check.outputs.run_linux }}
+      run_release: ${{ steps.check.outputs.run_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check commit message
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          
+          # Check for [ci-linux] trigger
+          if [[ "$COMMIT_MSG" == *"[ci-linux]"* ]]; then
+            echo "run_linux=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_linux=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Check for [ci-release] trigger
+          if [[ "$COMMIT_MSG" == *"[ci-release]"* ]]; then
+            echo "run_release=true" >> $GITHUB_OUTPUT
+            
+            # Extract version from Cargo.toml
+            VERSION=$(grep '^version =' Cargo.toml | head -1 | sed 's/.*"\([^"]*\)".*/\1/')
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "run_release=false" >> $GITHUB_OUTPUT
+            echo "version=" >> $GITHUB_OUTPUT
+          fi
+
+  # Build Linux AMD64
+  build-linux-amd64:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.run_linux == 'true' || needs.check-trigger.outputs.run_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-amd64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-amd64-
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Run tests
+        run: cargo test --release --target x86_64-unknown-linux-gnu
+
+      - name: Build deb package
+        run: cargo deb --target x86_64-unknown-linux-gnu --output target/debian/ugent-line-proxy_amd64.deb
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ugent-line-proxy-linux-amd64
+          path: target/x86_64-unknown-linux-gnu/release/ugent-line-proxy
+          retention-days: 30
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ugent-line-proxy_amd64-deb
+          path: target/debian/ugent-line-proxy_amd64.deb
+          retention-days: 30
+
+  # Build Linux AARCH64
+  build-linux-aarch64:
+    needs: check-trigger
+    if: needs.check-trigger.outputs.run_linux == 'true' || needs.check-trigger.outputs.run_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-aarch64-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-aarch64-
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build release binary
+        run: |
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo build --release --target aarch64-unknown-linux-gnu
+
+      - name: Build deb package
+        run: |
+          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          cargo deb --target aarch64-unknown-linux-gnu --output target/debian/ugent-line-proxy_aarch64.deb
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ugent-line-proxy-linux-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/ugent-line-proxy
+          retention-days: 30
+
+      - name: Upload deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ugent-line-proxy_aarch64-deb
+          path: target/debian/ugent-line-proxy_aarch64.deb
+          retention-days: 30
+
+  # Create GitHub Release
+  create-release:
+    needs: [check-trigger, build-linux-amd64, build-linux-aarch64]
+    if: needs.check-trigger.outputs.run_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download AMD64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ugent-line-proxy-linux-amd64
+          path: artifacts/
+
+      - name: Download AMD64 deb
+        uses: actions/download-artifact@v4
+        with:
+          name: ugent-line-proxy_amd64-deb
+          path: artifacts/
+
+      - name: Download AARCH64 binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ugent-line-proxy-linux-aarch64
+          path: artifacts/
+
+      - name: Download AARCH64 deb
+        uses: actions/download-artifact@v4
+        with:
+          name: ugent-line-proxy_aarch64-deb
+          path: artifacts/
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.check-trigger.outputs.version }}
+          name: Release v${{ needs.check-trigger.outputs.version }}
+          body: |
+            ## ugent-line-proxy v${{ needs.check-trigger.outputs.version }}
+            
+            ### Downloads
+            
+            | Platform | Architecture | Binary | Debian Package |
+            |----------|-------------|--------|----------------|
+            | Linux | AMD64 (x86_64) | ugent-line-proxy | ugent-line-proxy_amd64.deb |
+            | Linux | AARCH64 (arm64) | ugent-line-proxy | ugent-line-proxy_aarch64.deb |
+            
+            ### Installation (Debian/Ubuntu)
+            
+            ```bash
+            # Download and install deb package
+            sudo dpkg -i ugent-line-proxy_*.deb
+            ```
+            
+            ### Usage
+            
+            ```bash
+            # Copy example config
+            cp /usr/share/ugent-line-proxy/.env.example ~/.ugent-line-proxy/.env
+            
+            # Edit config
+            vim ~/.ugent-line-proxy/.env
+            
+            # Run
+            ugent-line-proxy
+            ```
+          files: |
+            artifacts/ugent-line-proxy
+            artifacts/*.deb
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
