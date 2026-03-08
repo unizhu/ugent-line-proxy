@@ -1,0 +1,600 @@
+//! LINE Messaging API client
+//!
+//! Provides methods for:
+//! - Sending reply messages (using reply token)
+//! - Sending push messages (proactive)
+//! - Downloading media content (image/audio/video)
+//! - Getting user profiles
+
+use reqwest::Client;
+use serde_json::{json, Value};
+use thiserror::Error;
+use tracing::{debug, error, info, warn};
+
+use crate::types::{ArtifactKind, BotInfo, OutboundArtifact, UserProfile};
+
+/// LINE API base URL
+const API_BASE: &str = "https://api.line.me/v2/bot";
+/// LINE Data API base URL (for content download)
+const DATA_API_BASE: &str = "https://api-data.line.me/v2/bot";
+
+/// LINE API errors
+#[derive(Debug, Error)]
+pub enum LineApiError {
+    #[error("HTTP request failed: {0}")]
+    RequestFailed(#[from] reqwest::Error),
+
+    #[error("API error: {0} - {1}")]
+    ApiError(u16, String),
+
+    #[error("Content download failed: {0}")]
+    DownloadFailed(String),
+
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
+
+    #[error("Invalid response: {0}")]
+    InvalidResponse(String),
+
+    #[error("Reply token expired or invalid")]
+    InvalidReplyToken,
+}
+
+/// LINE API client
+#[derive(Debug, Clone)]
+pub struct LineApiClient {
+    /// HTTP client
+    client: Client,
+    /// Channel access token
+    access_token: String,
+}
+
+impl LineApiClient {
+    /// Create a new LINE API client
+    pub fn new(access_token: String) -> Self {
+        Self {
+            client: Client::builder()
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("Failed to create HTTP client"),
+            access_token,
+        }
+    }
+
+    /// Create with custom HTTP client
+    pub fn with_client(access_token: String, client: Client) -> Self {
+        Self {
+            client,
+            access_token,
+        }
+    }
+
+    /// Reply to a webhook event using reply token
+    ///
+    /// Note: Reply tokens expire after about 1 minute
+    pub async fn reply_message(
+        &self,
+        reply_token: &str,
+        messages: Vec<Value>,
+    ) -> Result<(), LineApiError> {
+        if messages.is_empty() {
+            warn!("No messages to send in reply");
+            return Ok(());
+        }
+
+        // LINE allows max 5 messages in a reply
+        let messages: Vec<Value> = messages.into_iter().take(5).collect();
+
+        let url = format!("{}/message/reply", API_BASE);
+        let body = json!({
+            "replyToken": reply_token,
+            "messages": messages
+        });
+
+        debug!("Sending reply to LINE: {} messages", messages.len());
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Reply sent successfully");
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Reply failed: {} - {}", status, error_text);
+
+            if status.as_u16() == 400 && error_text.contains("Invalid reply token") {
+                Err(LineApiError::InvalidReplyToken)
+            } else {
+                Err(LineApiError::ApiError(status.as_u16(), error_text))
+            }
+        }
+    }
+
+    /// Send a push message to a user/group/room
+    ///
+    /// Use this for proactive messaging or when reply token is expired
+    pub async fn push_message(&self, to: &str, messages: Vec<Value>) -> Result<(), LineApiError> {
+        if messages.is_empty() {
+            warn!("No messages to send in push");
+            return Ok(());
+        }
+
+        // LINE allows max 5 messages in a push
+        let messages: Vec<Value> = messages.into_iter().take(5).collect();
+
+        let url = format!("{}/message/push", API_BASE);
+        let body = json!({
+            "to": to,
+            "messages": messages
+        });
+
+        debug!(
+            "Sending push message to {}: {} messages",
+            to,
+            messages.len()
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Push message sent successfully to {}", to);
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Push failed: {} - {}", status, error_text);
+            Err(LineApiError::ApiError(status.as_u16(), error_text))
+        }
+    }
+
+    /// Download media content (image/audio/video/file)
+    pub async fn download_content(
+        &self,
+        message_id: &str,
+    ) -> Result<(Vec<u8>, String), LineApiError> {
+        let url = format!("{}/message/{}/content", DATA_API_BASE, message_id);
+
+        debug!("Downloading content: {}", message_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Content download failed: {} - {}", status, error_text);
+            return Err(LineApiError::DownloadFailed(format!(
+                "{}: {}",
+                status, error_text
+            )));
+        }
+
+        // Get content type
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+
+        let bytes = response.bytes().await?;
+        info!(
+            "Downloaded {} bytes, content-type: {}",
+            bytes.len(),
+            content_type
+        );
+
+        Ok((bytes.to_vec(), content_type))
+    }
+
+    /// Download preview image for video/image
+    pub async fn download_preview(&self, message_id: &str) -> Result<Vec<u8>, LineApiError> {
+        let url = format!("{}/message/{}/content/preview", DATA_API_BASE, message_id);
+
+        debug!("Downloading preview: {}", message_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(LineApiError::DownloadFailed(format!(
+                "Preview download failed: {}",
+                status
+            )));
+        }
+
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+
+    /// Get user profile
+    pub async fn get_profile(&self, user_id: &str) -> Result<UserProfile, LineApiError> {
+        let url = format!("{}/profile/{}", API_BASE, user_id);
+
+        debug!("Getting profile for user: {}", user_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LineApiError::ApiError(status.as_u16(), error_text));
+        }
+
+        let profile = response.json().await?;
+        Ok(profile)
+    }
+
+    /// Get bot info
+    pub async fn get_bot_info(&self) -> Result<BotInfo, LineApiError> {
+        let url = format!("{}/info", API_BASE);
+
+        debug!("Getting bot info");
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LineApiError::ApiError(status.as_u16(), error_text));
+        }
+
+        let info = response.json().await?;
+        Ok(info)
+    }
+
+    /// Get group summary
+    pub async fn get_group_summary(&self, group_id: &str) -> Result<GroupSummary, LineApiError> {
+        let url = format!("{}/group/{}/summary", API_BASE, group_id);
+
+        debug!("Getting group summary: {}", group_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LineApiError::ApiError(status.as_u16(), error_text));
+        }
+
+        let summary = response.json().await?;
+        Ok(summary)
+    }
+
+    /// Get group member IDs
+    pub async fn get_group_member_ids(
+        &self,
+        group_id: &str,
+    ) -> Result<MemberIdsResponse, LineApiError> {
+        let url = format!("{}/group/{}/members/ids", API_BASE, group_id);
+
+        debug!("Getting group member IDs: {}", group_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LineApiError::ApiError(status.as_u16(), error_text));
+        }
+
+        let ids = response.json().await?;
+        Ok(ids)
+    }
+
+    /// Get group member profile
+    pub async fn get_group_member_profile(
+        &self,
+        group_id: &str,
+        user_id: &str,
+    ) -> Result<UserProfile, LineApiError> {
+        let url = format!("{}/group/{}/member/{}", API_BASE, group_id, user_id);
+
+        debug!("Getting group member profile: {}/{}", group_id, user_id);
+
+        let response = self
+            .client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(LineApiError::ApiError(status.as_u16(), error_text));
+        }
+
+        let profile = response.json().await?;
+        Ok(profile)
+    }
+
+    /// Leave a group
+    pub async fn leave_group(&self, group_id: &str) -> Result<(), LineApiError> {
+        let url = format!("{}/group/{}/leave", API_BASE, group_id);
+
+        debug!("Leaving group: {}", group_id);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Left group: {}", group_id);
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(LineApiError::ApiError(status.as_u16(), error_text))
+        }
+    }
+
+    /// Leave a room
+    pub async fn leave_room(&self, room_id: &str) -> Result<(), LineApiError> {
+        let url = format!("{}/room/{}/leave", API_BASE, room_id);
+
+        debug!("Leaving room: {}", room_id);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Left room: {}", room_id);
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            Err(LineApiError::ApiError(status.as_u16(), error_text))
+        }
+    }
+}
+
+// =============================================================================
+// Message Builders
+// =============================================================================
+
+/// Build a text message
+pub fn build_text_message(text: &str) -> Value {
+    json!({
+        "type": "text",
+        "text": text
+    })
+}
+
+/// Build an image message
+pub fn build_image_message(original_url: &str, preview_url: &str) -> Value {
+    json!({
+        "type": "image",
+        "originalContentUrl": original_url,
+        "previewImageUrl": preview_url
+    })
+}
+
+/// Build a video message
+pub fn build_video_message(original_url: &str, preview_url: &str) -> Value {
+    json!({
+        "type": "video",
+        "originalContentUrl": original_url,
+        "previewImageUrl": preview_url
+    })
+}
+
+/// Build an audio message
+pub fn build_audio_message(original_url: &str, duration_ms: i64) -> Value {
+    json!({
+        "type": "audio",
+        "originalContentUrl": original_url,
+        "duration": duration_ms
+    })
+}
+
+/// Build a sticker message
+pub fn build_sticker_message(package_id: &str, sticker_id: &str) -> Value {
+    json!({
+        "type": "sticker",
+        "packageId": package_id,
+        "stickerId": sticker_id
+    })
+}
+
+/// Build a location message
+pub fn build_location_message(title: &str, address: &str, latitude: f64, longitude: f64) -> Value {
+    json!({
+        "type": "location",
+        "title": title,
+        "address": address,
+        "latitude": latitude,
+        "longitude": longitude
+    })
+}
+
+/// Convert outbound artifact to LINE message
+pub fn artifact_to_message(artifact: &OutboundArtifact) -> Option<Value> {
+    match artifact.kind {
+        ArtifactKind::Image => {
+            // For images, we need to upload to a public URL first
+            // This is a limitation - LINE requires public URLs for media
+            // The UGENT side should handle this by providing public URLs
+            if let Some(url) = &artifact.local_path {
+                // Assume it's a URL if it starts with http
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    return Some(build_image_message(url, url));
+                }
+            }
+            None
+        }
+        ArtifactKind::Audio => {
+            // Similar limitation for audio
+            if let Some(url) = &artifact.local_path {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    // Duration is unknown, estimate from base64 size
+                    return Some(build_audio_message(url, 60000));
+                }
+            }
+            None
+        }
+        ArtifactKind::Video => {
+            if let Some(url) = &artifact.local_path {
+                if url.starts_with("http://") || url.starts_with("https://") {
+                    return Some(build_video_message(url, url));
+                }
+            }
+            None
+        }
+        ArtifactKind::File => {
+            // LINE doesn't support sending files directly
+            // We should send a text message with the file info instead
+            Some(build_text_message(&format!(
+                "📄 File: {} ({:.1} KB)",
+                artifact.file_name,
+                artifact.data.len() as f64 / 1024.0
+            )))
+        }
+    }
+}
+
+// =============================================================================
+// Additional Types
+// =============================================================================
+
+/// Group summary
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GroupSummary {
+    /// Group ID
+    #[serde(rename = "groupId")]
+    pub group_id: String,
+    /// Group name
+    #[serde(rename = "groupName")]
+    pub group_name: String,
+    /// Group picture URL
+    #[serde(rename = "pictureUrl")]
+    pub picture_url: Option<String>,
+}
+
+/// Member IDs response
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct MemberIdsResponse {
+    /// List of user IDs
+    pub member_ids: Vec<String>,
+    /// Next page token (for pagination)
+    pub next: Option<String>,
+}
+
+// =============================================================================
+// Unit Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_text_message() {
+        let msg = build_text_message("Hello, World!");
+        assert_eq!(msg["type"], "text");
+        assert_eq!(msg["text"], "Hello, World!");
+    }
+
+    #[test]
+    fn test_build_image_message() {
+        let msg = build_image_message(
+            "https://example.com/original.jpg",
+            "https://example.com/preview.jpg",
+        );
+        assert_eq!(msg["type"], "image");
+        assert_eq!(
+            msg["originalContentUrl"],
+            "https://example.com/original.jpg"
+        );
+        assert_eq!(msg["previewImageUrl"], "https://example.com/preview.jpg");
+    }
+
+    #[test]
+    fn test_build_sticker_message() {
+        let msg = build_sticker_message("446", "1988");
+        assert_eq!(msg["type"], "sticker");
+        assert_eq!(msg["packageId"], "446");
+        assert_eq!(msg["stickerId"], "1988");
+    }
+}

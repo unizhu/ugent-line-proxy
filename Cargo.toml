@@ -1,0 +1,69 @@
+[package]
+name = "ugent-line-proxy"
+version = "0.1.0"
+edition = "2021"
+description = "LINE Messaging API proxy server for UGENT - connects LINE webhooks to local UGENT instances via WebSocket"
+license = "MIT"
+repository = "https://github.com/ugent/ugent-line-proxy"
+rust-version = "1.75"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.44", features = ["full"] }
+
+# Web framework
+axum = { version = "0.8", features = ["macros", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Crypto for signature verification
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+
+# UUID
+uuid = { version = "1.16", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# WebSocket
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Concurrency
+dashmap = "6"
+parking_lot = "0.12"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Configuration
+dotenvy = "0.15"
+
+# Storage (optional, for persistence)
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }
+
+[features]
+default = []
+persistence = ["sqlx"]
+
+[dev-dependencies]
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[[bin]]
+name = "ugent-line-proxy"
+path = "src/main.rs"
