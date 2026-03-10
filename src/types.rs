@@ -72,10 +72,10 @@ pub enum MessageDirection {
 /// Proxy message wrapper - the main message format for WebSocket communication
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyMessage {
-    /// Unique message ID
-    pub id: Uuid,
-    /// Source channel
-    pub channel: Channel,
+    /// Unique message ID (UUID string for JSON compatibility)
+    pub id: String,
+    /// Source channel ("line", "wechat", "wecom")
+    pub channel: String,
     /// Message direction
     pub direction: MessageDirection,
     /// Conversation ID (user ID, group ID, or room ID)
@@ -92,8 +92,8 @@ pub struct ProxyMessage {
     pub reply_token: Option<String>,
     /// Quote token (LINE-specific: for quote/reply messages)
     pub quote_token: Option<String>,
-    /// Webhook event ID (for deduplication)
-    pub webhook_event_id: Option<String>,
+    /// Webhook event ID (for deduplication) - always present
+    pub webhook_event_id: String,
     /// Source type (user/group/room)
     pub source_type: SourceType,
 }
@@ -108,8 +108,8 @@ impl ProxyMessage {
         let (message, media) = Self::extract_message_content(&event.message);
 
         Self {
-            id: Uuid::new_v4(),
-            channel: Channel::Line,
+            id: Uuid::new_v4().to_string(),
+            channel: Channel::Line.to_string(),
             direction: MessageDirection::Inbound,
             conversation_id,
             sender_id,
@@ -118,7 +118,7 @@ impl ProxyMessage {
             timestamp: event.timestamp,
             reply_token: event.reply_token.clone(),
             quote_token: event.message.quote_token(),
-            webhook_event_id: Some(event.webhook_event_id.clone()),
+            webhook_event_id: event.webhook_event_id.clone(),
             source_type: source.source_type(),
         }
     }
@@ -960,6 +960,30 @@ pub struct AuthData {
     pub api_key: String,
 }
 
+/// Server capabilities advertised in AuthResult
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Capabilities {
+    /// Supports delivery acknowledgment via ResponseResult
+    pub response_result: bool,
+    /// Supports artifact URL staging
+    pub artifact_staging: bool,
+    /// Supports reply_token -> push fallback
+    pub push_fallback: bool,
+    /// Supports per-client targeted routing
+    pub targeted_routing: bool,
+}
+
+impl Default for Capabilities {
+    fn default() -> Self {
+        Self {
+            response_result: true,
+            artifact_staging: false,  // Phase 2
+            push_fallback: true,
+            targeted_routing: false,  // Phase 2
+        }
+    }
+}
+
 /// WebSocket protocol message types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -967,14 +991,43 @@ pub enum WsProtocol {
     /// Authentication request from client
     Auth { data: AuthData },
     /// Authentication result from server
-    AuthResult { success: bool, message: String },
+    AuthResult {
+        success: bool,
+        message: String,
+        /// Protocol version (currently 2)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        protocol_version: Option<u32>,
+        /// Server capabilities
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        capabilities: Option<Capabilities>,
+    },
     /// Incoming message from LINE
     Message { data: Box<ProxyMessage> },
     /// Response from UGENT client
     Response {
-        original_id: Uuid,
+        /// Client request correlation ID (optional)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        /// Original message ID from ProxyMessage
+        original_id: String,
+        /// Response text content
         content: String,
+        /// Outbound artifacts (files/images)
+        #[serde(default)]
         artifacts: Vec<OutboundArtifact>,
+    },
+    /// Delivery acknowledgment from server to client
+    ResponseResult {
+        /// Client request correlation ID
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        request_id: Option<String>,
+        /// Original message ID
+        original_id: String,
+        /// Whether delivery succeeded
+        success: bool,
+        /// Error message if failed
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     /// Ping from client
     Ping,
@@ -1007,6 +1060,65 @@ pub enum ArtifactKind {
     Audio,
     Video,
     File,
+}
+
+// =============================================================================
+// Pending Message Tracking
+// =============================================================================
+
+/// Pending inbound message awaiting response
+#[derive(Debug, Clone)]
+pub struct PendingMessage {
+    /// Proxy message ID (used as original_id in response)
+    pub original_id: String,
+    /// LINE conversation ID
+    pub conversation_id: String,
+    /// LINE reply token (expires in ~1 minute)
+    pub reply_token: Option<String>,
+    /// When the message was received
+    pub received_at: std::time::Instant,
+    /// When reply token expires (~60 seconds from received_at)
+    pub reply_token_expires_at: Option<std::time::Instant>,
+    /// Webhook event ID for deduplication
+    pub webhook_event_id: String,
+    /// Client that should receive the response (for targeted routing)
+    pub client_id: Option<String>,
+}
+
+impl PendingMessage {
+    /// Create a new pending message from a proxy message
+    pub fn from_proxy_message(msg: &ProxyMessage) -> Self {
+        let now = std::time::Instant::now();
+        let reply_token_expires_at = msg.reply_token.as_ref().map(|_| {
+            // LINE reply tokens expire in ~60 seconds
+            now + std::time::Duration::from_secs(55) // Use 55s to be safe
+        });
+
+        Self {
+            original_id: msg.id.clone(),
+            conversation_id: msg.conversation_id.clone(),
+            reply_token: msg.reply_token.clone(),
+            received_at: now,
+            reply_token_expires_at,
+            webhook_event_id: msg.webhook_event_id.clone(),
+            client_id: None, // Will be set when targeted routing is implemented
+        }
+    }
+
+    /// Check if reply token is still valid
+    pub fn is_reply_token_valid(&self) -> bool {
+        match self.reply_token_expires_at {
+            Some(expires_at) => std::time::Instant::now() < expires_at,
+            None => false,
+        }
+    }
+
+    /// Check if this pending message has expired (for cleanup)
+    pub fn is_expired(&self) -> bool {
+        // Expire after 5 minutes regardless of reply token
+        std::time::Instant::now().duration_since(self.received_at)
+            > std::time::Duration::from_secs(300)
+    }
 }
 
 // =============================================================================

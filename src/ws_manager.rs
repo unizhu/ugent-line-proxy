@@ -26,6 +26,7 @@ use parking_lot::RwLock;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tracing::{debug, error, info, warn};
 
+use crate::broker::MessageBroker;
 use crate::config::Config;
 use crate::types::{AuthData, ClientInfo, WsProtocol};
 
@@ -186,11 +187,21 @@ pub async fn websocket_handler(
     State(ws_manager): State<Arc<WebSocketManager>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, ws_manager, addr))
+    ws.on_upgrade(move |socket| handle_socket(socket, ws_manager, addr, None))
+}
+
+/// Handle WebSocket upgrade request with broker for response handling
+pub async fn websocket_handler_with_broker(
+    ws: WebSocketUpgrade,
+    State(ws_manager): State<Arc<WebSocketManager>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    broker: Arc<MessageBroker>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, ws_manager, addr, Some(broker)))
 }
 
 /// Handle WebSocket connection
-async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, addr: SocketAddr) {
+async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, addr: SocketAddr, broker: Option<Arc<MessageBroker>>) {
     info!("New WebSocket connection from: {}", addr);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
@@ -251,6 +262,8 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                                     .send(WsProtocol::AuthResult {
                                         success: false,
                                         message: "Invalid API key".to_string(),
+                                        protocol_version: None,
+                                        capabilities: None,
                                     })
                                     .await;
                                 continue;
@@ -274,6 +287,8 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                                 .send(WsProtocol::AuthResult {
                                     success: true,
                                     message: "Authentication successful".to_string(),
+                                    protocol_version: Some(crate::broker::MessageBroker::protocol_version()),
+                                    capabilities: Some(crate::broker::MessageBroker::capabilities()),
                                 })
                                 .await;
                         }
@@ -302,6 +317,7 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                         }
 
                         WsProtocol::Response {
+                            request_id,
                             original_id,
                             content,
                             artifacts,
@@ -312,12 +328,25 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                             }
 
                             info!(
-                                "Received response from {}: original_id={}, content_len={}, artifacts={}",
+                                "Received response from {}: request_id={:?}, original_id={}, content_len={}, artifacts={}",
                                 client_id.as_deref().unwrap_or("unknown"),
+                                request_id,
                                 original_id,
                                 content.len(),
                                 artifacts.len()
                             );
+
+                            // Handle response through broker if available
+                            if let Some(ref broker) = broker {
+                                if let Err(e) = broker.handle_response(
+                                    request_id,
+                                    original_id,
+                                    content,
+                                    artifacts,
+                                ).await {
+                                    error!("Failed to handle response: {}", e);
+                                }
+                            }
                         }
 
                         WsProtocol::Error { code, message } => {
@@ -326,6 +355,10 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
 
                         WsProtocol::AuthResult { .. } => {
                             warn!("Unexpected AuthResult from client {}", addr);
+                        }
+
+                        WsProtocol::ResponseResult { .. } => {
+                            warn!("Unexpected ResponseResult from client {}", addr);
                         }
                     }
                 }

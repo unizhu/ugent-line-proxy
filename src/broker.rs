@@ -5,17 +5,26 @@
 //! - Routing messages to connected UGENT clients via WebSocket
 //! - Handling responses from UGENT and sending them back to LINE
 //! - Managing outbound artifacts (files, images, etc.)
+//! - Tracking pending messages with reply token expiry
+//! - Sending ResponseResult acknowledgments
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::RwLock;
 use reqwest::Client;
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::line_api::{self, artifact_to_message, build_text_message, LineApiClient};
-use crate::types::{ProxyMessage, WsProtocol};
+use crate::types::{Capabilities, OutboundArtifact, PendingMessage, ProxyMessage, WsProtocol};
 use crate::ws_manager::WebSocketManager;
+
+/// Current protocol version
+const PROTOCOL_VERSION: u32 = 2;
+
+/// Maximum pending messages to keep in memory
+const MAX_PENDING_MESSAGES: usize = 1000;
 
 /// Message broker
 #[derive(Debug)]
@@ -28,8 +37,8 @@ pub struct MessageBroker {
     line_client: LineApiClient,
     /// HTTP client for artifact downloads
     http_client: Client,
-    /// Pending messages waiting for response (message_id -> original message)
-    pending_messages: RwLock<Vec<String>>,
+    /// Pending messages awaiting response (original_id -> PendingMessage)
+    pending_messages: RwLock<HashMap<String, PendingMessage>>,
 }
 
 impl MessageBroker {
@@ -47,21 +56,45 @@ impl MessageBroker {
             ws_manager,
             line_client,
             http_client,
-            pending_messages: RwLock::new(Vec::new()),
+            pending_messages: RwLock::new(HashMap::new()),
         }
     }
 
-    /// Send a message to all connected UGENT clients
+    /// Get server capabilities
+    pub fn capabilities() -> Capabilities {
+        Capabilities::default()
+    }
+
+    /// Get protocol version
+    pub fn protocol_version() -> u32 {
+        PROTOCOL_VERSION
+    }
+
+    /// Send a message to all connected UGENT clients and track it
     pub async fn send_to_clients(&self, message: ProxyMessage) -> Result<(), BrokerError> {
-        let msg_id = message.id.to_string();
+        let original_id = message.id.clone();
+
+        // Create pending message for tracking
+        let pending = PendingMessage::from_proxy_message(&message);
 
         // Track pending message
         {
-            let mut pending = self.pending_messages.write().await;
-            pending.push(msg_id.clone());
-            // Keep only last 1000 pending messages
-            if pending.len() > 1000 {
-                *pending = pending.split_off(900);
+            let mut pending_map = self.pending_messages.write();
+            pending_map.insert(original_id.clone(), pending);
+
+            // Cleanup expired entries if over limit
+            if pending_map.len() > MAX_PENDING_MESSAGES {
+                pending_map.retain(|_, v| !v.is_expired());
+            }
+
+            // If still over limit, remove oldest entries
+            if pending_map.len() > MAX_PENDING_MESSAGES {
+                let mut entries: Vec<_> = pending_map.iter().map(|(k, v)| (k.clone(), v.received_at)).collect();
+                entries.sort_by_key(|(_, t)| *t);
+                let to_remove = entries.len() - MAX_PENDING_MESSAGES + 100;
+                for (key, _) in entries.into_iter().take(to_remove) {
+                    pending_map.remove(&key);
+                }
             }
         }
 
@@ -76,25 +109,44 @@ impl MessageBroker {
         Ok(())
     }
 
-    /// Handle response from UGENT client
+    /// Handle response from UGENT client and send ResponseResult
     pub async fn handle_response(
         &self,
-        original_id: &str,
-        content: &str,
-        artifacts: Vec<crate::types::OutboundArtifact>,
+        request_id: Option<String>,
+        original_id: String,
+        content: String,
+        artifacts: Vec<OutboundArtifact>,
     ) -> Result<(), BrokerError> {
         info!(
-            "Handling response: original_id={}, content_len={}, artifacts={}",
+            "Handling response: original_id={}, request_id={:?}, content_len={}, artifacts={}",
             original_id,
+            request_id,
             content.len(),
             artifacts.len()
         );
 
-        // Remove from pending
-        {
-            let mut pending = self.pending_messages.write().await;
-            pending.retain(|id| id != original_id);
-        }
+        // Get and remove pending message
+        let pending = {
+            let mut pending_map = self.pending_messages.write();
+            pending_map.remove(&original_id)
+        };
+
+        let pending = match pending {
+            Some(p) => p,
+            None => {
+                warn!("No pending message found for original_id={}", original_id);
+                // Send failure ResponseResult if request_id present
+                if let Some(ref req_id) = request_id {
+                    self.send_response_result(
+                        Some(req_id.clone()),
+                        original_id.clone(),
+                        false,
+                        Some("No pending message found".to_string()),
+                    ).await?;
+                }
+                return Err(BrokerError::NoPendingMessage(original_id));
+            }
+        };
 
         // Build LINE messages
         let mut messages = Vec::new();
@@ -102,7 +154,7 @@ impl MessageBroker {
         // Add text content
         if !content.is_empty() {
             // Split long content into multiple messages (LINE has 5000 char limit)
-            for chunk in split_text(content, 4900) {
+            for chunk in split_text(&content, 4900) {
                 messages.push(build_text_message(&chunk));
             }
         }
@@ -112,8 +164,6 @@ impl MessageBroker {
             if let Some(msg) = artifact_to_message(artifact) {
                 messages.push(msg);
             } else {
-                // For artifacts that can't be sent as LINE messages,
-                // send a text description
                 warn!(
                     "Artifact {} cannot be sent directly to LINE",
                     artifact.file_name
@@ -121,13 +171,108 @@ impl MessageBroker {
             }
         }
 
-        // Send messages (this would need the original conversation_id)
-        // For now, we'll log this
-        info!("Prepared {} messages for LINE", messages.len());
+        // Try to send messages
+        let send_result = self.send_line_messages(&pending, messages).await;
 
-        // Note: To actually send, we need to store the original message's
-        // conversation_id and reply_token. This is a TODO.
+        // Send ResponseResult to client
+        if let Some(ref req_id) = request_id {
+            match &send_result {
+                Ok(()) => {
+                    self.send_response_result(
+                        Some(req_id.clone()),
+                        original_id,
+                        true,
+                        None,
+                    ).await?;
+                }
+                Err(e) => {
+                    self.send_response_result(
+                        Some(req_id.clone()),
+                        original_id,
+                        false,
+                        Some(e.to_string()),
+                    ).await?;
+                }
+            }
+        }
 
+        send_result
+    }
+
+    /// Send LINE messages using reply token or push fallback
+    async fn send_line_messages(
+        &self,
+        pending: &PendingMessage,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<(), BrokerError> {
+        if messages.is_empty() {
+            info!("No messages to send");
+            return Ok(());
+        }
+
+        // Try reply token first if valid
+        if pending.is_reply_token_valid() {
+            if let Some(ref token) = pending.reply_token {
+                // LINE limits to 5 messages per reply
+                for chunk in messages.chunks(5) {
+                    match self.line_client.reply_message(token, chunk.to_vec()).await {
+                        Ok(()) => {
+                            info!("Sent {} message(s) via reply token", chunk.len());
+                        }
+                        Err(line_api::LineApiError::InvalidReplyToken) => {
+                            warn!("Reply token expired during batch, falling back to push");
+                            return self.send_via_push(&pending.conversation_id, messages).await;
+                        }
+                        Err(e) => {
+                            error!("LINE API error: {}", e);
+                            return Err(BrokerError::LineApi(e.to_string()));
+                        }
+                    }
+                }
+                return Ok(());
+            }
+        }
+
+        // Fall back to push message
+        info!("Using push message (reply token {:?})",
+            if pending.reply_token.is_some() { "expired" } else { "not available" }
+        );
+        self.send_via_push(&pending.conversation_id, messages).await
+    }
+
+    /// Send messages via LINE push API
+    async fn send_via_push(
+        &self,
+        conversation_id: &str,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<(), BrokerError> {
+        // LINE limits to 5 messages per push
+        for chunk in messages.chunks(5) {
+            self.line_client
+                .push_message(conversation_id, chunk.to_vec())
+                .await?;
+            info!("Sent {} message(s) via push to {}", chunk.len(), conversation_id);
+        }
+        Ok(())
+    }
+
+    /// Send ResponseResult to client
+    async fn send_response_result(
+        &self,
+        request_id: Option<String>,
+        original_id: String,
+        success: bool,
+        error: Option<String>,
+    ) -> Result<(), BrokerError> {
+        let result = WsProtocol::ResponseResult {
+            request_id,
+            original_id,
+            success,
+            error,
+        };
+
+        // Broadcast to all clients (or could target specific client with targeted routing)
+        self.ws_manager.broadcast(result).await?;
         Ok(())
     }
 
@@ -136,7 +281,7 @@ impl MessageBroker {
         &self,
         conversation_id: &str,
         reply_token: Option<&str>,
-        artifact: &crate::types::OutboundArtifact,
+        artifact: &OutboundArtifact,
     ) -> Result<(), BrokerError> {
         debug!(
             "Sending artifact: conversation={}, file={}, kind={:?}",
@@ -207,6 +352,11 @@ impl MessageBroker {
     pub fn ws_manager(&self) -> Arc<WebSocketManager> {
         self.ws_manager.clone()
     }
+
+    /// Get pending message count
+    pub fn pending_count(&self) -> usize {
+        self.pending_messages.read().len()
+    }
 }
 
 /// Broker errors
@@ -232,6 +382,9 @@ pub enum BrokerError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("No pending message found: {0}")]
+    NoPendingMessage(String),
 }
 
 impl From<line_api::LineApiError> for BrokerError {
@@ -299,5 +452,14 @@ mod tests {
         let text = "Line 1\nLine 2\nLine 3";
         let chunks = split_text(text, 20);
         assert!(chunks.iter().any(|c| c.contains('\n')));
+    }
+
+    #[test]
+    fn test_capabilities_default() {
+        let caps = Capabilities::default();
+        assert!(caps.response_result);
+        assert!(caps.push_fallback);
+        assert!(!caps.artifact_staging);
+        assert!(!caps.targeted_routing);
     }
 }

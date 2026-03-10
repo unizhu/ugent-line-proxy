@@ -107,12 +107,13 @@ async fn websocket_handler(
     axum::extract::State(broker): axum::extract::State<Arc<MessageBroker>>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<SocketAddr>,
 ) -> impl axum::response::IntoResponse {
-    use ugent_line_proxy::ws_manager::websocket_handler as ws_handler;
+    use ugent_line_proxy::ws_manager::websocket_handler_with_broker as ws_handler;
 
     ws_handler(
         ws,
         axum::extract::State(broker.ws_manager()),
         axum::extract::ConnectInfo(addr),
+        broker,
     )
     .await
 }
