@@ -229,24 +229,62 @@ sudo certbot --nginx -d your-domain.com
 
 ### Systemd Service
 
+Create the environment file first:
+```bash
+sudo mkdir -p /etc/ugent-line-proxy
+sudo tee /etc/ugent-line-proxy/.env > /dev/null << 'EOF'
+LINE_CHANNEL_SECRET=your_secret_here
+LINE_CHANNEL_ACCESS_TOKEN=your_token_here
+LINE_PROXY_API_KEY=your_api_key_here
+LINE_PROXY_BIND_ADDR=0.0.0.0:3000
+EOF
+```
+
+Service file at `/etc/systemd/system/ugent-line-proxy.service`:
 ```ini
 [Unit]
-Description=UGENT LINE Proxy
+Description=UGENT LINE Proxy Server
 After=network.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=ugent
-WorkingDirectory=/opt/ugent-line-proxy
-Environment="LINE_CHANNEL_SECRET=your_secret"
-Environment="LINE_CHANNEL_ACCESS_TOKEN=your_token"
-Environment="LINE_PROXY_API_KEY=your_api_key"
-ExecStart=/opt/ugent-line-proxy/ugent-line-proxy
+User=root
+WorkingDirectory=/var/lib/ugent-line-proxy
+EnvironmentFile=/etc/ugent-line-proxy/.env
+ExecStart=/usr/bin/ugent-line-proxy
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=30
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
+```
+
+Install and start:
+```bash
+# Create directories
+sudo mkdir -p /var/lib/ugent-line-proxy
+sudo mkdir -p /var/log/ugent-line-proxy
+
+# Copy binary
+sudo cp target/release/ugent-line-proxy /usr/bin/
+sudo chmod +x /usr/bin/ugent-line-proxy
+
+# Install service
+cd ugent-line-proxy
+sudo cp ugent-line-proxy.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable ugent-line-proxy
+sudo systemctl start ugent-line-proxy
+
+# Check status
+sudo systemctl status ugent-line-proxy
 ```
 
 ### Docker

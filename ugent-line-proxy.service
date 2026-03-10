@@ -4,9 +4,8 @@ After=network.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-User=ugent-line-proxy
-Group=ugent-line-proxy
+Type=simple
+User=root
 WorkingDirectory=/var/lib/ugent-line-proxy
 EnvironmentFile=/etc/ugent-line-proxy/.env
 ExecStart=/usr/bin/ugent-line-proxy
@@ -15,11 +14,8 @@ RestartSec=5
 TimeoutStopSec=30
 LimitNOFILE=65536
 
-# Security hardening
+# Security hardening (relaxed for root user)
 NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/ugent-line-proxy /var/log/ugent-line-proxy
 PrivateTmp=true
 
 [Install]
