@@ -155,3 +155,13 @@ CMD ["ugent-line-proxy"]
 ## License
 
 MIT
+
+## Documentation
+
+For detailed documentation, see the [docs](./docs) folder:
+
+- [Architecture](./docs/ARCHITECTURE.md) - System architecture and components
+- [Quick Start](./docs/QUICK_START.md) - Getting started guide
+- [WebSocket Protocol](./docs/WEBSOCKET_PROTOCOL.md) - WebSocket message specification
+- [Features](./docs/FEATURES.md) - Features for UGENT LINE clients
+- [API Reference](./docs/API_REFERENCE.md) - Complete API documentation
