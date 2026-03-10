@@ -117,6 +117,116 @@ export LINE_PROXY_API_KEY=your_api_key
 
 ## Deployment
 
+### Nginx Configuration
+
+Create an nginx configuration file at `/etc/nginx/sites-available/ugent-line-proxy`:
+
+```nginx
+# UGENT LINE Proxy - Nginx Reverse Proxy Configuration
+# Place this file at /etc/nginx/sites-available/ugent-line-proxy
+# Then: sudo ln -s /etc/nginx/sites-available/ugent-line-proxy /etc/nginx/sites-enabled/
+# Test: sudo nginx -t
+# Reload: sudo systemctl reload nginx
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name your-domain.com;  # Replace with your domain
+
+    # Redirect HTTP to HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name your-domain.com;  # Replace with your domain
+
+    # SSL Configuration (use Let's Encrypt certbot for automatic certs)
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_tickets off;
+
+    # Modern SSL configuration
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+
+    # HSTS
+    add_header Strict-Transport-Security "max-age=63072000" always;
+
+    # LINE Webhook Callback (matches LINE_WEBHOOK_PATH in .env.example)
+    # URL: https://your-domain.com/line/callback
+    location /line/callback {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Timeout settings for LINE webhooks
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+    }
+
+    # WebSocket Endpoint (matches WS_PATH in .env.example)
+    # URL: wss://your-domain.com/ws
+    location /ws {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSocket timeout settings
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 3600s;
+        proxy_read_timeout 3600s;
+    }
+
+    # Health Check Endpoint
+    location /health {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Deny all other locations
+    location / {
+        return 404;
+    }
+}
+```
+
+**LINE Developers Console Setup:**
+- Webhook URL: `https://your-domain.com/line/callback`
+- This matches the `LINE_WEBHOOK_PATH=/line/callback` from `.env.example`
+
+**Enable the site:**
+```bash
+# Create symlink
+sudo ln -s /etc/nginx/sites-available/ugent-line-proxy /etc/nginx/sites-enabled/
+
+# Test configuration
+sudo nginx -t
+
+# Reload nginx
+sudo systemctl reload nginx
+
+# Get SSL certificate (if using Let's Encrypt)
+sudo certbot --nginx -d your-domain.com
+```
+
 ### Systemd Service
 
 ```ini
