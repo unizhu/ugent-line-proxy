@@ -36,6 +36,9 @@ pub struct Config {
     /// Logging configuration
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// Storage configuration
+    #[serde(default)]
+    pub storage: StorageConfig,
 }
 
 impl Config {
@@ -46,6 +49,7 @@ impl Config {
         let websocket = WebSocketConfig::from_env()?;
         let media = MediaConfig::from_env();
         let logging = LoggingConfig::from_env();
+        let storage = StorageConfig::from_env();
 
         Ok(Self {
             server,
@@ -53,6 +57,7 @@ impl Config {
             websocket,
             media,
             logging,
+            storage,
         })
     }
 
@@ -176,8 +181,7 @@ impl LineConfig {
         let channel_access_token = std::env::var("LINE_CHANNEL_ACCESS_TOKEN").unwrap_or_default();
 
         let webhook_path =
-            std::env::var("LINE_PROXY_WEBHOOK_PATH")
-                .unwrap_or_else(|_| default_webhook_path());
+            std::env::var("LINE_PROXY_WEBHOOK_PATH").unwrap_or_else(|_| default_webhook_path());
         let webhook_path = ensure_leading_slash(&webhook_path);
 
         let skip_signature = std::env::var("LINE_PROXY_SKIP_SIGNATURE")
@@ -356,6 +360,35 @@ impl LoggingConfig {
             format,
             file,
         }
+    }
+}
+
+// =============================================================================
+// Storage Configuration
+// =============================================================================
+
+/// Storage configuration
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StorageConfig {
+    /// Enable persistent storage
+    #[serde(default)]
+    pub enabled: bool,
+    /// Storage path (default: ~/.ugent/line-plugin/)
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+}
+
+impl StorageConfig {
+    fn from_env() -> Self {
+        let enabled = std::env::var("LINE_PROXY_STORAGE_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let path = std::env::var("LINE_PROXY_STORAGE_PATH")
+            .ok()
+            .map(PathBuf::from);
+
+        Self { enabled, path }
     }
 }
 

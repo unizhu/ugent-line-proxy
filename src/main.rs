@@ -16,7 +16,8 @@ use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ugent_line_proxy::{
-    broker::MessageBroker, config::Config, handle_webhook, ws_manager::WebSocketManager,
+    broker::MessageBroker, config::Config, handle_webhook, storage::Storage,
+    ws_manager::WebSocketManager,
 };
 
 #[tokio::main]
@@ -54,7 +55,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create WebSocket manager
-    let ws_manager = Arc::new(WebSocketManager::new(config.clone()));
+    let ws_manager = if config.storage.enabled {
+        match Storage::new() {
+            Ok(storage) => {
+                info!("Persistent storage enabled at ~/.ugent/line-plugin/");
+                Arc::new(WebSocketManager::with_storage(config.clone(), storage))
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to initialize storage: {}. Falling back to in-memory mode.",
+                    e
+                );
+                Arc::new(WebSocketManager::new(config.clone()))
+            }
+        }
+    } else {
+        Arc::new(WebSocketManager::new(config.clone()))
+    };
 
     // Create message broker
     let broker = Arc::new(MessageBroker::new(config.clone(), ws_manager.clone()));

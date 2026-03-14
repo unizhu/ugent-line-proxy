@@ -17,6 +17,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
 use crate::line_api::{self, artifact_to_message, build_text_message, LineApiClient};
+use crate::storage::{
+    Storage, METRIC_MESSAGES_RECEIVED, METRIC_MESSAGES_SENT, METRIC_PENDING_MESSAGES,
+    METRIC_RESPONSES_RECEIVED,
+};
 use crate::types::{Capabilities, OutboundArtifact, PendingMessage, ProxyMessage, WsProtocol};
 use crate::ws_manager::{SendError, WebSocketManager};
 
@@ -39,6 +43,8 @@ pub struct MessageBroker {
     http_client: Client,
     /// Pending messages awaiting response (original_id -> PendingMessage)
     pending_messages: RwLock<HashMap<String, PendingMessage>>,
+    /// Persistent storage (optional)
+    storage: Option<Arc<Storage>>,
 }
 
 impl MessageBroker {
@@ -57,6 +63,30 @@ impl MessageBroker {
             line_client,
             http_client,
             pending_messages: RwLock::new(HashMap::new()),
+            storage: None,
+        }
+    }
+
+    /// Create a new message broker with persistent storage
+    pub fn with_storage(
+        config: Arc<Config>,
+        ws_manager: Arc<WebSocketManager>,
+        storage: Storage,
+    ) -> Self {
+        let line_client = LineApiClient::new(config.line.channel_access_token.clone());
+
+        let http_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client");
+
+        Self {
+            config,
+            ws_manager,
+            line_client,
+            http_client,
+            pending_messages: RwLock::new(HashMap::new()),
+            storage: Some(Arc::new(storage)),
         }
     }
 
@@ -87,13 +117,13 @@ impl MessageBroker {
                 "Routing message for conversation {} to owner: {}",
                 conversation_id, owner_client_id
             );
-            
+
             pending.client_id = Some(owner_client_id.clone());
-            
+
             let ws_msg = WsProtocol::Message {
                 data: Box::new(message.clone()),
             };
-            
+
             match self.ws_manager.send_to(&owner_client_id, ws_msg).await {
                 Ok(()) => {
                     // Track pending message
@@ -105,7 +135,8 @@ impl MessageBroker {
                         "Owner client {} disconnected, releasing ownership and falling back to broadcast",
                         owner_client_id
                     );
-                    self.ws_manager.release_client_conversations(&owner_client_id);
+                    self.ws_manager
+                        .release_client_conversations(&owner_client_id);
                     // Fall through to broadcast
                 }
             }
@@ -116,7 +147,7 @@ impl MessageBroker {
             "No owner for conversation {}, broadcasting to all clients",
             conversation_id
         );
-        
+
         // Track pending message
         self.track_pending_message(original_id.clone(), pending);
 
@@ -133,7 +164,7 @@ impl MessageBroker {
     /// Track a pending message
     fn track_pending_message(&self, original_id: String, pending: PendingMessage) {
         let mut pending_map = self.pending_messages.write();
-        pending_map.insert(original_id, pending);
+        pending_map.insert(original_id.clone(), pending.clone());
 
         // Cleanup expired entries if over limit
         if pending_map.len() > MAX_PENDING_MESSAGES {
@@ -142,13 +173,32 @@ impl MessageBroker {
 
         // If still over limit, remove oldest entries
         if pending_map.len() > MAX_PENDING_MESSAGES {
-            let mut entries: Vec<_> = pending_map.iter().map(|(k, v)| (k.clone(), v.received_at)).collect();
+            let mut entries: Vec<_> = pending_map
+                .iter()
+                .map(|(k, v)| (k.clone(), v.received_at))
+                .collect();
             entries.sort_by_key(|(_, t)| *t);
             let to_remove = entries.len().saturating_sub(MAX_PENDING_MESSAGES - 100);
             for (key, _) in entries.into_iter().take(to_remove) {
                 pending_map.remove(&key);
             }
         }
+
+        // Persist to storage if enabled
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.pending().store(&pending) {
+                warn!("Failed to persist pending message: {}", e);
+            }
+            // Record metric
+            if let Err(e) = storage.metrics().increment(METRIC_PENDING_MESSAGES) {
+                warn!("Failed to record pending message metric: {}", e);
+            }
+            // Record message received metric
+            if let Err(e) = storage.metrics().increment(METRIC_MESSAGES_RECEIVED) {
+                warn!("Failed to record message received metric: {}", e);
+            }
+        }
+        drop(pending_map);
     }
 
     /// Handle response from UGENT client and send ResponseResult
@@ -184,7 +234,8 @@ impl MessageBroker {
                         original_id.clone(),
                         false,
                         Some("No pending message found".to_string()),
-                    ).await?;
+                    )
+                    .await?;
                 }
                 return Err(BrokerError::NoPendingMessage(original_id));
             }
@@ -216,16 +267,19 @@ impl MessageBroker {
         // Try to send messages
         let send_result = self.send_line_messages(&pending, messages).await;
 
+        // Record response received metric if storage enabled
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.metrics().increment(METRIC_RESPONSES_RECEIVED) {
+                warn!("Failed to record response received metric: {}", e);
+            }
+        }
+
         // Send ResponseResult to client
         if let Some(ref req_id) = request_id {
             match &send_result {
                 Ok(()) => {
-                    self.send_response_result(
-                        Some(req_id.clone()),
-                        original_id,
-                        true,
-                        None,
-                    ).await?;
+                    self.send_response_result(Some(req_id.clone()), original_id, true, None)
+                        .await?;
                 }
                 Err(e) => {
                     self.send_response_result(
@@ -233,7 +287,8 @@ impl MessageBroker {
                         original_id,
                         false,
                         Some(e.to_string()),
-                    ).await?;
+                    )
+                    .await?;
                 }
             }
         }
@@ -276,8 +331,13 @@ impl MessageBroker {
         }
 
         // Fall back to push message
-        info!("Using push message (reply token {:?})",
-            if pending.reply_token.is_some() { "expired" } else { "not available" }
+        info!(
+            "Using push message (reply token {:?})",
+            if pending.reply_token.is_some() {
+                "expired"
+            } else {
+                "not available"
+            }
         );
         self.send_via_push(&pending.conversation_id, messages).await
     }
@@ -293,8 +353,20 @@ impl MessageBroker {
             self.line_client
                 .push_message(conversation_id, chunk.to_vec())
                 .await?;
-            info!("Sent {} message(s) via push to {}", chunk.len(), conversation_id);
+            info!(
+                "Sent {} message(s) via push to {}",
+                chunk.len(),
+                conversation_id
+            );
         }
+
+        // Record metrics if storage enabled
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.metrics().increment(METRIC_MESSAGES_SENT) {
+                warn!("Failed to record message sent metric: {}", e);
+            }
+        }
+
         Ok(())
     }
 
@@ -512,6 +584,6 @@ mod tests {
         assert!(caps.response_result);
         assert!(caps.push_fallback);
         assert!(!caps.artifact_staging);
-        assert!(caps.targeted_routing);  // Now implemented with first-response-wins ownership
+        assert!(caps.targeted_routing); // Now implemented with first-response-wins ownership
     }
 }

@@ -977,9 +977,9 @@ impl Default for Capabilities {
     fn default() -> Self {
         Self {
             response_result: true,
-            artifact_staging: false,  // Phase 2
+            artifact_staging: false, // Phase 2
             push_fallback: true,
-            targeted_routing: true,   // Implemented: first-response-wins ownership model
+            targeted_routing: true, // Implemented: first-response-wins ownership model
         }
     }
 }

@@ -40,6 +40,7 @@ pub mod broker;
 pub mod config;
 pub mod error;
 pub mod line_api;
+pub mod storage;
 pub mod types;
 pub mod webhook;
 pub mod ws_manager;
@@ -48,6 +49,7 @@ pub use broker::MessageBroker;
 pub use config::Config;
 pub use error::ProxyError;
 pub use line_api::LineApiClient;
+pub use storage::Storage;
 pub use types::*;
 pub use ws_manager::WebSocketManager;
 

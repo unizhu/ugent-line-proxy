@@ -28,6 +28,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::broker::MessageBroker;
 use crate::config::Config;
+use crate::storage::{MetricsStore, Storage, METRIC_OWNERSHIP_CLAIMS, METRIC_OWNERSHIP_RELEASES};
 use crate::types::{AuthData, ClientInfo, WsProtocol};
 
 /// WebSocket manager
@@ -46,6 +47,8 @@ pub struct WebSocketManager {
     conversation_owners: RwLock<HashMap<String, String>>,
     /// Client conversations: client_id -> Set<conversation_id>
     client_conversations: RwLock<HashMap<String, HashSet<String>>>,
+    /// Persistent storage (optional)
+    storage: Option<Arc<Storage>>,
 }
 
 impl std::fmt::Debug for WebSocketManager {
@@ -54,7 +57,10 @@ impl std::fmt::Debug for WebSocketManager {
             .field("client_count", &self.client_count.load(Ordering::Relaxed))
             .field("config", &self.config)
             .field("reply_token_map_len", &self.reply_token_map.read().len())
-            .field("conversation_owners_len", &self.conversation_owners.read().len())
+            .field(
+                "conversation_owners_len",
+                &self.conversation_owners.read().len(),
+            )
             .finish()
     }
 }
@@ -70,7 +76,27 @@ impl WebSocketManager {
             reply_token_map: RwLock::new(HashMap::new()),
             conversation_owners: RwLock::new(HashMap::new()),
             client_conversations: RwLock::new(HashMap::new()),
+            storage: None,
         }
+    }
+
+    /// Create a new WebSocket manager with persistent storage
+    pub fn with_storage(config: Arc<Config>, storage: Storage) -> Self {
+        Self {
+            clients: DashMap::new(),
+            client_infos: RwLock::new(HashMap::new()),
+            client_count: AtomicUsize::new(0),
+            config,
+            reply_token_map: RwLock::new(HashMap::new()),
+            conversation_owners: RwLock::new(HashMap::new()),
+            client_conversations: RwLock::new(HashMap::new()),
+            storage: Some(Arc::new(storage)),
+        }
+    }
+
+    /// Get the storage reference (if enabled)
+    pub fn storage(&self) -> Option<&Storage> {
+        self.storage.as_ref().map(|s| s.as_ref())
     }
 
     /// Get the number of connected clients
@@ -163,10 +189,10 @@ impl WebSocketManager {
         if self.clients.remove(client_id).is_some() {
             self.client_infos.write().remove(client_id);
             self.client_count.fetch_sub(1, Ordering::Relaxed);
-            
+
             // Release all conversations owned by this client
             self.release_client_conversations(client_id);
-            
+
             info!("Client disconnected: {}", client_id);
         }
     }
@@ -180,7 +206,7 @@ impl WebSocketManager {
     /// If the same client claims again, ownership is refreshed (returns true).
     pub fn claim_conversation(&self, conversation_id: &str, client_id: &str) -> bool {
         let mut owners = self.conversation_owners.write();
-        
+
         if let Some(existing_owner) = owners.get(conversation_id) {
             if existing_owner != client_id {
                 // Already owned by another client
@@ -191,17 +217,28 @@ impl WebSocketManager {
                 return false;
             }
         }
-        
+
         // Claim or refresh ownership
         owners.insert(conversation_id.to_string(), client_id.to_string());
-        
+
         // Track in client's conversation set
         let mut client_convs = self.client_conversations.write();
         client_convs
             .entry(client_id.to_string())
             .or_default()
             .insert(conversation_id.to_string());
-        
+
+        // Persist to storage if enabled
+        if let Some(ref storage) = self.storage {
+            if let Err(e) = storage.ownership().claim(conversation_id, client_id) {
+                warn!("Failed to persist ownership claim: {}", e);
+            }
+            // Record metric
+            if let Err(e) = storage.metrics().increment(METRIC_OWNERSHIP_CLAIMS) {
+                warn!("Failed to record ownership claim metric: {}", e);
+            }
+        }
+
         info!(
             "Client {} claimed ownership of conversation {}",
             client_id, conversation_id
@@ -219,19 +256,34 @@ impl WebSocketManager {
     /// Check if a specific client owns a conversation
     pub fn is_conversation_owner(&self, conversation_id: &str, client_id: &str) -> bool {
         let owners = self.conversation_owners.read();
-        owners.get(conversation_id).map(|o| o == client_id).unwrap_or(false)
+        owners
+            .get(conversation_id)
+            .map(|o| o == client_id)
+            .unwrap_or(false)
     }
 
     /// Release all conversations owned by a client (on disconnect).
     /// Returns the number of conversations released.
     pub fn release_client_conversations(&self, client_id: &str) -> usize {
         let mut client_convs = self.client_conversations.write();
-        
+
         if let Some(convs) = client_convs.remove(client_id) {
             let mut owners = self.conversation_owners.write();
             for conv_id in &convs {
                 owners.remove(conv_id);
             }
+
+            // Persist to storage if enabled
+            if let Some(ref storage) = self.storage {
+                if let Err(e) = storage.ownership().release_by_client(client_id) {
+                    warn!("Failed to persist ownership release: {}", e);
+                }
+                // Record metric
+                if let Err(e) = storage.metrics().increment(METRIC_OWNERSHIP_RELEASES) {
+                    warn!("Failed to record ownership release metric: {}", e);
+                }
+            }
+
             info!(
                 "Released {} conversations owned by client {}",
                 convs.len(),
@@ -255,6 +307,35 @@ impl WebSocketManager {
             .get(client_id)
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// Load ownership state from persistent storage
+    /// Call this on startup to restore ownership after restart
+    pub fn load_ownership_from_storage(&self) -> Result<usize, crate::storage::StorageError> {
+        let storage = self.storage.as_ref().ok_or_else(|| {
+            crate::storage::StorageError::InvalidPath("Storage not enabled".into())
+        })?;
+
+        let records = storage.ownership().get_all()?;
+        let mut owners = self.conversation_owners.write();
+        let mut client_convs = self.client_conversations.write();
+
+        let count = records.len();
+        for record in records {
+            owners.insert(record.conversation_id.clone(), record.client_id.clone());
+            client_convs
+                .entry(record.client_id)
+                .or_default()
+                .insert(record.conversation_id);
+        }
+
+        info!("Loaded {} ownership records from storage", count);
+        Ok(count)
+    }
+
+    /// Get the metrics store if storage is enabled
+    pub fn metrics(&self) -> Option<&MetricsStore> {
+        self.storage.as_ref().map(|s| s.metrics())
     }
 }
 
@@ -298,7 +379,12 @@ pub async fn websocket_handler_with_broker(
 }
 
 /// Handle WebSocket connection
-async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, addr: SocketAddr, broker: Option<Arc<MessageBroker>>) {
+async fn handle_socket(
+    socket: WebSocket,
+    ws_manager: Arc<WebSocketManager>,
+    addr: SocketAddr,
+    broker: Option<Arc<MessageBroker>>,
+) {
     info!("New WebSocket connection from: {}", addr);
 
     let (mut ws_tx, mut ws_rx) = socket.split();
@@ -444,7 +530,7 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                                         &pending.conversation_id,
                                         client_id_str,
                                     );
-                                    
+
                                     if claimed {
                                         info!(
                                             "Client {} claimed ownership of conversation {}",
@@ -457,13 +543,11 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                                         );
                                     }
                                 }
-                                
-                                if let Err(e) = broker.handle_response(
-                                    request_id,
-                                    original_id,
-                                    content,
-                                    artifacts,
-                                ).await {
+
+                                if let Err(e) = broker
+                                    .handle_response(request_id, original_id, content, artifacts)
+                                    .await
+                                {
                                     error!("Failed to handle response: {}", e);
                                 }
                             }
@@ -581,6 +665,7 @@ mod tests {
             },
             media: crate::config::MediaConfig::default(),
             logging: crate::config::LoggingConfig::default(),
+            storage: crate::config::StorageConfig::default(),
         })
     }
 
