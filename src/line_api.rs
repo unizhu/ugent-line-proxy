@@ -27,6 +27,9 @@ pub enum LineApiError {
     #[error("API error: {0} - {1}")]
     ApiError(u16, String),
 
+    #[error("Rate limited. Retry after {0} seconds")]
+    RateLimited(u64),
+
     #[error("Content download failed: {0}")]
     DownloadFailed(String),
 
@@ -77,6 +80,18 @@ impl LineApiClient {
         reply_token: &str,
         messages: Vec<Value>,
     ) -> Result<(), LineApiError> {
+        self.reply_message_with_retry_key(reply_token, messages, None).await
+    }
+
+    /// Reply to a webhook event with optional retry key for idempotency
+    ///
+    /// Note: Reply tokens expire after about 1 minute
+    pub async fn reply_message_with_retry_key(
+        &self,
+        reply_token: &str,
+        messages: Vec<Value>,
+        retry_key: Option<&str>,
+    ) -> Result<(), LineApiError> {
         if messages.is_empty() {
             warn!("No messages to send in reply");
             return Ok(());
@@ -93,20 +108,38 @@ impl LineApiClient {
 
         debug!("Sending reply to LINE: {} messages", messages.len());
 
-        let response = self
+        let mut request = self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+
+        // Add X-Line-Retry-Key header for idempotency if provided
+        if let Some(key) = retry_key {
+            request = request.header("X-Line-Retry-Key", key);
+            debug!("Using retry key: {}", key);
+        }
+
+        let response = request.send().await?;
 
         let status = response.status();
         if status.is_success() {
             info!("Reply sent successfully");
             Ok(())
         } else {
+            // Handle rate limiting (429) - read header before consuming response
+            if status.as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(60);
+                warn!("Rate limited. Retry after {} seconds", retry_after);
+                return Err(LineApiError::RateLimited(retry_after));
+            }
+
             let error_text = response
                 .text()
                 .await
@@ -125,6 +158,19 @@ impl LineApiClient {
     ///
     /// Use this for proactive messaging or when reply token is expired
     pub async fn push_message(&self, to: &str, messages: Vec<Value>) -> Result<(), LineApiError> {
+        self.push_message_with_retry_key(to, messages, None).await
+    }
+
+    /// Send a push message with optional retry key for idempotency
+    ///
+    /// The retry key prevents duplicate messages when retrying failed requests.
+    /// Valid for 24 hours after the first request.
+    pub async fn push_message_with_retry_key(
+        &self,
+        to: &str,
+        messages: Vec<Value>,
+        retry_key: Option<&str>,
+    ) -> Result<(), LineApiError> {
         if messages.is_empty() {
             warn!("No messages to send in push");
             return Ok(());
@@ -145,20 +191,38 @@ impl LineApiClient {
             messages.len()
         );
 
-        let response = self
+        let mut request = self
             .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.access_token))
             .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .json(&body);
+
+        // Add X-Line-Retry-Key header for idempotency if provided
+        if let Some(key) = retry_key {
+            request = request.header("X-Line-Retry-Key", key);
+            debug!("Using retry key: {}", key);
+        }
+
+        let response = request.send().await?;
 
         let status = response.status();
         if status.is_success() {
             info!("Push message sent successfully to {}", to);
             Ok(())
         } else {
+            // Handle rate limiting (429) - read header before consuming response
+            if status.as_u16() == 429 {
+                let retry_after = response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(60);
+                warn!("Rate limited. Retry after {} seconds", retry_after);
+                return Err(LineApiError::RateLimited(retry_after));
+            }
+
             let error_text = response
                 .text()
                 .await
@@ -290,6 +354,43 @@ impl LineApiClient {
 
         let info = response.json().await?;
         Ok(info)
+    }
+
+    /// Start a loading animation ("typing indicator") in a chat
+    ///
+    /// This shows a "typing..." indicator to the user while UGENT is processing.
+    /// The loading animation lasts for about 20 seconds maximum.
+    ///
+    /// API endpoint: POST /v2/bot/chat/loading/start
+    pub async fn start_loading(&self, chat_id: &str) -> Result<(), LineApiError> {
+        let url = format!("{}/chat/loading/start", API_BASE);
+        let body = json!({
+            "chatId": chat_id
+        });
+
+        debug!("Starting loading animation for chat: {}", chat_id);
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Loading animation started for chat: {}", chat_id);
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Failed to start loading: {} - {}", status, error_text);
+            Err(LineApiError::ApiError(status.as_u16(), error_text))
+        }
     }
 
     /// Get group summary

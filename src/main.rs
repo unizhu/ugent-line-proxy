@@ -56,23 +56,24 @@ async fn main() -> anyhow::Result<()> {
 
     // Create WebSocket manager
     let ws_manager = if config.storage.enabled {
-        match Storage::new() {
+        let storage_path = config.storage.path.clone();
+        match Storage::with_optional_path(storage_path) {
             Ok(storage) => {
-                info!("Persistent storage enabled at ~/.ugent/line-plugin/");
+                if let Some(ref path) = config.storage.path {
+                    info!("Persistent storage enabled at {:?}", path);
+                } else {
+                    info!("Persistent storage enabled at ~/.ugent/line-plugin/");
+                }
                 Arc::new(WebSocketManager::with_storage(config.clone(), storage))
             }
             Err(e) => {
-                warn!(
-                    "Failed to initialize storage: {}. Falling back to in-memory mode.",
-                    e
-                );
+                warn!("Failed to initialize storage: {}. Falling back to in-memory mode.", e);
                 Arc::new(WebSocketManager::new(config.clone()))
             }
         }
     } else {
         Arc::new(WebSocketManager::new(config.clone()))
     };
-
     // Create message broker
     let broker = Arc::new(MessageBroker::new(config.clone(), ws_manager.clone()));
 

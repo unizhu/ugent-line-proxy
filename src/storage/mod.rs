@@ -61,6 +61,15 @@ impl Storage {
         Self::with_path(&path)
     }
 
+    /// Create or open storage with optional custom path
+    pub fn with_optional_path(custom_path: Option<PathBuf>) -> Result<Self, StorageError> {
+        let path = match custom_path {
+            Some(p) => p,
+            None => Self::default_path()?,
+        };
+        Self::with_path(&path)
+    }
+
     /// Create or open storage at a specific path
     pub fn with_path(db_path: &PathBuf) -> Result<Self, StorageError> {
         // Ensure parent directory exists
