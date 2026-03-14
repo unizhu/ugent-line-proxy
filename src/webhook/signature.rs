@@ -6,6 +6,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 /// Type alias for HMAC-SHA256
 type HmacSha256 = Hmac<Sha256>;
@@ -52,18 +53,9 @@ pub fn verify_signature(body: &[u8], signature: &str, channel_secret: &str) -> b
     let result = mac.finalize();
     let computed_bytes = result.into_bytes();
 
-    // Constant-time comparison (simple implementation)
-    // Note: For production, consider using the `subtle` crate
-    if signature_bytes.len() != computed_bytes.len() {
-        return false;
-    }
-
-    let mut result = 0u8;
-    for (a, b) in signature_bytes.iter().zip(computed_bytes.iter()) {
-        result |= a ^ b;
-    }
-
-    result == 0
+    // Constant-time comparison using subtle crate
+    // This prevents timing attacks that could leak signature bytes
+    signature_bytes.ct_eq(computed_bytes.as_slice()).into()
 }
 
 /// Compute signature for testing

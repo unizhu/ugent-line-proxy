@@ -3,12 +3,15 @@
 //! Provides persistence for:
 //! - Conversation ownership (which client owns a conversation)
 //! - Pending messages (messages awaiting response)
+//! - Webhook event deduplication
 
+mod dedup;
 mod metrics;
 mod ownership;
 mod pending;
 mod schema;
 
+pub use dedup::WebhookDedupStore;
 pub use metrics::{HourlyMetric, MetricRecord, MetricsSnapshot, MetricsStore};
 pub use metrics::{
     METRIC_CONNECTED_CLIENTS, METRIC_MESSAGES_RECEIVED, METRIC_MESSAGES_SENT,
@@ -52,6 +55,8 @@ pub struct Storage {
     pending: PendingMessageStore,
     /// Metrics store
     metrics: MetricsStore,
+    /// Webhook event deduplication store
+    dedup: WebhookDedupStore,
 }
 
 impl Storage {
@@ -99,6 +104,7 @@ impl Storage {
             ownership: OwnershipStore::new(Arc::clone(&conn)),
             pending: PendingMessageStore::new(Arc::clone(&conn)),
             metrics: MetricsStore::new(Arc::clone(&conn)),
+            dedup: WebhookDedupStore::new(Arc::clone(&conn)),
             conn,
         })
     }
@@ -123,6 +129,11 @@ impl Storage {
     /// Get metrics store
     pub fn metrics(&self) -> &MetricsStore {
         &self.metrics
+    }
+
+    /// Get webhook deduplication store
+    pub fn dedup(&self) -> &WebhookDedupStore {
+        &self.dedup
     }
 
     /// Run maintenance tasks (cleanup expired entries, vacuum, etc.)

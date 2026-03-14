@@ -101,6 +101,15 @@ fn migration_v1(conn: &Connection) -> Result<(), StorageError> {
         [],
     )?;
 
+    // Webhook deduplication table
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS webhook_dedup (
+            webhook_event_id TEXT PRIMARY KEY,
+            seen_at INTEGER NOT NULL
+        )",
+        [],
+    )?;
+
     // Record migration
     conn.execute(
         "INSERT INTO schema_version (version) VALUES (?)",

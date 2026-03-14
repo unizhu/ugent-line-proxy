@@ -100,6 +100,11 @@ impl MessageBroker {
         PROTOCOL_VERSION
     }
 
+    /// Get storage reference (if enabled)
+    pub fn storage(&self) -> Option<&Storage> {
+        self.storage.as_deref()
+    }
+
     /// Route a message to the appropriate UGENT client.
     /// If a conversation has an owner, route only to that client.
     /// Otherwise, broadcast to all clients (first-response-wins).

@@ -120,6 +120,15 @@ async fn process_event(
         return Ok(());
     }
 
+    // Check for duplicate events using dedup store (if storage is enabled)
+    if let Some(storage) = broker.storage() {
+        let webhook_event_id = event.webhook_event_id();
+        if storage.dedup().check_and_mark(webhook_event_id) {
+            debug!("Skipping duplicate webhook event: {}", webhook_event_id);
+            return Ok(());
+        }
+    }
+
     // Skip redelivered events if configured
     if event.is_redelivery() && !broker.config.line.process_redeliveries {
         debug!("Skipping redelivered event");
@@ -192,6 +201,7 @@ async fn process_event(
 trait EventExt {
     fn mode(&self) -> WebhookMode;
     fn is_redelivery(&self) -> bool;
+    fn webhook_event_id(&self) -> &str;
 }
 
 impl EventExt for Event {
@@ -228,6 +238,24 @@ impl EventExt for Event {
             Event::Beacon(e) => e.delivery_context.is_redelivery,
             Event::AccountLink(e) => e.delivery_context.is_redelivery,
             Event::Things(e) => e.delivery_context.is_redelivery,
+        }
+    }
+
+    fn webhook_event_id(&self) -> &str {
+        match self {
+            Event::Message(e) => &e.webhook_event_id,
+            Event::Unsend(e) => &e.webhook_event_id,
+            Event::Follow(e) => &e.webhook_event_id,
+            Event::Unfollow(e) => &e.webhook_event_id,
+            Event::Join(e) => &e.webhook_event_id,
+            Event::Leave(e) => &e.webhook_event_id,
+            Event::MemberJoined(e) => &e.webhook_event_id,
+            Event::MemberLeft(e) => &e.webhook_event_id,
+            Event::Postback(e) => &e.webhook_event_id,
+            Event::VideoPlayComplete(e) => &e.webhook_event_id,
+            Event::Beacon(e) => &e.webhook_event_id,
+            Event::AccountLink(e) => &e.webhook_event_id,
+            Event::Things(e) => &e.webhook_event_id,
         }
     }
 }
