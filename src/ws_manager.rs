@@ -4,7 +4,7 @@
 //! incoming LINE messages to connected clients.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -42,6 +42,10 @@ pub struct WebSocketManager {
     config: Arc<Config>,
     /// Reply token to client mapping
     reply_token_map: RwLock<HashMap<String, String>>,
+    /// Conversation ownership: conversation_id -> client_id
+    conversation_owners: RwLock<HashMap<String, String>>,
+    /// Client conversations: client_id -> Set<conversation_id>
+    client_conversations: RwLock<HashMap<String, HashSet<String>>>,
 }
 
 impl std::fmt::Debug for WebSocketManager {
@@ -50,6 +54,7 @@ impl std::fmt::Debug for WebSocketManager {
             .field("client_count", &self.client_count.load(Ordering::Relaxed))
             .field("config", &self.config)
             .field("reply_token_map_len", &self.reply_token_map.read().len())
+            .field("conversation_owners_len", &self.conversation_owners.read().len())
             .finish()
     }
 }
@@ -63,6 +68,8 @@ impl WebSocketManager {
             client_count: AtomicUsize::new(0),
             config,
             reply_token_map: RwLock::new(HashMap::new()),
+            conversation_owners: RwLock::new(HashMap::new()),
+            client_conversations: RwLock::new(HashMap::new()),
         }
     }
 
@@ -151,13 +158,103 @@ impl WebSocketManager {
         self.client_count.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Remove a client
+    /// Remove a client and release all conversations owned by it
     fn remove_client(&self, client_id: &str) {
         if self.clients.remove(client_id).is_some() {
             self.client_infos.write().remove(client_id);
             self.client_count.fetch_sub(1, Ordering::Relaxed);
+            
+            // Release all conversations owned by this client
+            self.release_client_conversations(client_id);
+            
             info!("Client disconnected: {}", client_id);
         }
+    }
+
+    // =========================================================================
+    // Conversation Ownership Methods (for targeted routing)
+    // =========================================================================
+
+    /// Claim ownership of a conversation for a client.
+    /// Returns true if claim succeeded, false if already owned by another client.
+    /// If the same client claims again, ownership is refreshed (returns true).
+    pub fn claim_conversation(&self, conversation_id: &str, client_id: &str) -> bool {
+        let mut owners = self.conversation_owners.write();
+        
+        if let Some(existing_owner) = owners.get(conversation_id) {
+            if existing_owner != client_id {
+                // Already owned by another client
+                debug!(
+                    "Conversation {} already owned by {}, cannot claim for {}",
+                    conversation_id, existing_owner, client_id
+                );
+                return false;
+            }
+        }
+        
+        // Claim or refresh ownership
+        owners.insert(conversation_id.to_string(), client_id.to_string());
+        
+        // Track in client's conversation set
+        let mut client_convs = self.client_conversations.write();
+        client_convs
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(conversation_id.to_string());
+        
+        info!(
+            "Client {} claimed ownership of conversation {}",
+            client_id, conversation_id
+        );
+        true
+    }
+
+    /// Get the client that owns a conversation.
+    /// Returns None if no owner exists or owner is stale.
+    pub fn get_conversation_owner(&self, conversation_id: &str) -> Option<String> {
+        let owners = self.conversation_owners.read();
+        owners.get(conversation_id).cloned()
+    }
+
+    /// Check if a specific client owns a conversation
+    pub fn is_conversation_owner(&self, conversation_id: &str, client_id: &str) -> bool {
+        let owners = self.conversation_owners.read();
+        owners.get(conversation_id).map(|o| o == client_id).unwrap_or(false)
+    }
+
+    /// Release all conversations owned by a client (on disconnect).
+    /// Returns the number of conversations released.
+    pub fn release_client_conversations(&self, client_id: &str) -> usize {
+        let mut client_convs = self.client_conversations.write();
+        
+        if let Some(convs) = client_convs.remove(client_id) {
+            let mut owners = self.conversation_owners.write();
+            for conv_id in &convs {
+                owners.remove(conv_id);
+            }
+            info!(
+                "Released {} conversations owned by client {}",
+                convs.len(),
+                client_id
+            );
+            convs.len()
+        } else {
+            0
+        }
+    }
+
+    /// Get the number of conversations with owners
+    pub fn owned_conversation_count(&self) -> usize {
+        self.conversation_owners.read().len()
+    }
+
+    /// Get conversations owned by a specific client
+    pub fn get_client_conversations(&self, client_id: &str) -> Vec<String> {
+        self.client_conversations
+            .read()
+            .get(client_id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -327,9 +424,11 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
                                 continue;
                             }
 
+                            let client_id_str = client_id.as_deref().unwrap_or("unknown");
+
                             info!(
                                 "Received response from {}: request_id={:?}, original_id={}, content_len={}, artifacts={}",
-                                client_id.as_deref().unwrap_or("unknown"),
+                                client_id_str,
                                 request_id,
                                 original_id,
                                 content.len(),
@@ -338,6 +437,27 @@ async fn handle_socket(socket: WebSocket, ws_manager: Arc<WebSocketManager>, add
 
                             // Handle response through broker if available
                             if let Some(ref broker) = broker {
+                                // Get pending message to find conversation_id for ownership claiming
+                                if let Some(pending) = broker.get_pending_message(&original_id) {
+                                    // CLAIM OWNERSHIP on first response (first-response-wins)
+                                    let claimed = ws_manager.claim_conversation(
+                                        &pending.conversation_id,
+                                        client_id_str,
+                                    );
+                                    
+                                    if claimed {
+                                        info!(
+                                            "Client {} claimed ownership of conversation {}",
+                                            client_id_str, pending.conversation_id
+                                        );
+                                    } else {
+                                        debug!(
+                                            "Client {} responded to conversation {} (already owned)",
+                                            client_id_str, pending.conversation_id
+                                        );
+                                    }
+                                }
+                                
                                 if let Err(e) = broker.handle_response(
                                     request_id,
                                     original_id,

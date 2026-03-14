@@ -18,7 +18,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::line_api::{self, artifact_to_message, build_text_message, LineApiClient};
 use crate::types::{Capabilities, OutboundArtifact, PendingMessage, ProxyMessage, WsProtocol};
-use crate::ws_manager::WebSocketManager;
+use crate::ws_manager::{SendError, WebSocketManager};
 
 /// Current protocol version
 const PROTOCOL_VERSION: u32 = 2;
@@ -70,43 +70,85 @@ impl MessageBroker {
         PROTOCOL_VERSION
     }
 
-    /// Send a message to all connected UGENT clients and track it
+    /// Route a message to the appropriate UGENT client.
+    /// If a conversation has an owner, route only to that client.
+    /// Otherwise, broadcast to all clients (first-response-wins).
     pub async fn send_to_clients(&self, message: ProxyMessage) -> Result<(), BrokerError> {
         let original_id = message.id.clone();
+        let conversation_id = message.conversation_id.clone();
 
         // Create pending message for tracking
-        let pending = PendingMessage::from_proxy_message(&message);
+        let mut pending = PendingMessage::from_proxy_message(&message);
 
-        // Track pending message
-        {
-            let mut pending_map = self.pending_messages.write();
-            pending_map.insert(original_id.clone(), pending);
-
-            // Cleanup expired entries if over limit
-            if pending_map.len() > MAX_PENDING_MESSAGES {
-                pending_map.retain(|_, v| !v.is_expired());
-            }
-
-            // If still over limit, remove oldest entries
-            if pending_map.len() > MAX_PENDING_MESSAGES {
-                let mut entries: Vec<_> = pending_map.iter().map(|(k, v)| (k.clone(), v.received_at)).collect();
-                entries.sort_by_key(|(_, t)| *t);
-                let to_remove = entries.len() - MAX_PENDING_MESSAGES + 100;
-                for (key, _) in entries.into_iter().take(to_remove) {
-                    pending_map.remove(&key);
+        // Check if conversation has an owner
+        if let Some(owner_client_id) = self.ws_manager.get_conversation_owner(&conversation_id) {
+            // Route to owning client only
+            info!(
+                "Routing message for conversation {} to owner: {}",
+                conversation_id, owner_client_id
+            );
+            
+            pending.client_id = Some(owner_client_id.clone());
+            
+            let ws_msg = WsProtocol::Message {
+                data: Box::new(message.clone()),
+            };
+            
+            match self.ws_manager.send_to(&owner_client_id, ws_msg).await {
+                Ok(()) => {
+                    // Track pending message
+                    self.track_pending_message(original_id.clone(), pending);
+                    return Ok(());
+                }
+                Err(SendError::ClientDisconnected) | Err(SendError::ClientNotFound) => {
+                    warn!(
+                        "Owner client {} disconnected, releasing ownership and falling back to broadcast",
+                        owner_client_id
+                    );
+                    self.ws_manager.release_client_conversations(&owner_client_id);
+                    // Fall through to broadcast
                 }
             }
         }
 
-        // Create WebSocket protocol message
+        // No owner or owner disconnected - broadcast to all clients
+        info!(
+            "No owner for conversation {}, broadcasting to all clients",
+            conversation_id
+        );
+        
+        // Track pending message
+        self.track_pending_message(original_id.clone(), pending);
+
         let ws_msg = WsProtocol::Message {
             data: Box::new(message),
         };
 
-        // Broadcast to all clients
+        // Broadcast for first-response-wins
         self.ws_manager.broadcast(ws_msg).await?;
 
         Ok(())
+    }
+
+    /// Track a pending message
+    fn track_pending_message(&self, original_id: String, pending: PendingMessage) {
+        let mut pending_map = self.pending_messages.write();
+        pending_map.insert(original_id, pending);
+
+        // Cleanup expired entries if over limit
+        if pending_map.len() > MAX_PENDING_MESSAGES {
+            pending_map.retain(|_, v| !v.is_expired());
+        }
+
+        // If still over limit, remove oldest entries
+        if pending_map.len() > MAX_PENDING_MESSAGES {
+            let mut entries: Vec<_> = pending_map.iter().map(|(k, v)| (k.clone(), v.received_at)).collect();
+            entries.sort_by_key(|(_, t)| *t);
+            let to_remove = entries.len().saturating_sub(MAX_PENDING_MESSAGES - 100);
+            for (key, _) in entries.into_iter().take(to_remove) {
+                pending_map.remove(&key);
+            }
+        }
     }
 
     /// Handle response from UGENT client and send ResponseResult
@@ -353,6 +395,16 @@ impl MessageBroker {
         self.ws_manager.clone()
     }
 
+    /// Get a pending message by original_id (for ownership claiming)
+    pub fn get_pending_message(&self, original_id: &str) -> Option<PendingMessage> {
+        self.pending_messages.read().get(original_id).cloned()
+    }
+
+    /// Remove a pending message by original_id
+    pub fn remove_pending_message(&self, original_id: &str) -> Option<PendingMessage> {
+        self.pending_messages.write().remove(original_id)
+    }
+
     /// Get pending message count
     pub fn pending_count(&self) -> usize {
         self.pending_messages.read().len()
@@ -460,6 +512,6 @@ mod tests {
         assert!(caps.response_result);
         assert!(caps.push_fallback);
         assert!(!caps.artifact_staging);
-        assert!(!caps.targeted_routing);
+        assert!(caps.targeted_routing);  // Now implemented with first-response-wins ownership
     }
 }

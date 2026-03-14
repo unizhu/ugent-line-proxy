@@ -979,7 +979,7 @@ impl Default for Capabilities {
             response_result: true,
             artifact_staging: false,  // Phase 2
             push_fallback: true,
-            targeted_routing: false,  // Phase 2
+            targeted_routing: true,   // Implemented: first-response-wins ownership model
         }
     }
 }
@@ -1118,6 +1118,49 @@ impl PendingMessage {
         // Expire after 5 minutes regardless of reply token
         std::time::Instant::now().duration_since(self.received_at)
             > std::time::Duration::from_secs(300)
+    }
+}
+
+// =============================================================================
+// Conversation Ownership (for targeted routing)
+// =============================================================================
+
+/// Conversation ownership binding for targeted client routing
+/// When a client responds to a conversation first, it claims ownership
+/// and all future messages for that conversation route to that client only.
+#[derive(Debug, Clone)]
+pub struct ConversationOwnership {
+    /// Conversation ID (LINE user/group/room ID)
+    pub conversation_id: String,
+    /// Client ID that owns this conversation
+    pub client_id: String,
+    /// When ownership was claimed
+    pub claimed_at: std::time::Instant,
+    /// Last activity timestamp (for stale detection)
+    pub last_activity: std::time::Instant,
+}
+
+impl ConversationOwnership {
+    /// Create a new ownership binding
+    pub fn new(conversation_id: String, client_id: String) -> Self {
+        let now = std::time::Instant::now();
+        Self {
+            conversation_id,
+            client_id,
+            claimed_at: now,
+            last_activity: now,
+        }
+    }
+
+    /// Update last activity timestamp
+    pub fn touch(&mut self) {
+        self.last_activity = std::time::Instant::now();
+    }
+
+    /// Check if ownership is stale (no activity for 30 minutes)
+    pub fn is_stale(&self) -> bool {
+        std::time::Instant::now().duration_since(self.last_activity)
+            > std::time::Duration::from_secs(1800)
     }
 }
 
