@@ -160,6 +160,15 @@ fn default_true() -> bool {
     true
 }
 
+/// Ensure path starts with /
+fn ensure_leading_slash(path: &str) -> String {
+    if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    }
+}
+
 impl LineConfig {
     fn from_env() -> Result<Self, ConfigError> {
         let channel_secret = std::env::var("LINE_CHANNEL_SECRET").unwrap_or_default();
@@ -167,7 +176,9 @@ impl LineConfig {
         let channel_access_token = std::env::var("LINE_CHANNEL_ACCESS_TOKEN").unwrap_or_default();
 
         let webhook_path =
-            std::env::var("LINE_PROXY_WEBHOOK_PATH").unwrap_or_else(|_| default_webhook_path());
+            std::env::var("LINE_PROXY_WEBHOOK_PATH")
+                .unwrap_or_else(|_| default_webhook_path());
+        let webhook_path = ensure_leading_slash(&webhook_path);
 
         let skip_signature = std::env::var("LINE_PROXY_SKIP_SIGNATURE")
             .map(|v| v == "true" || v == "1")
@@ -225,6 +236,7 @@ fn default_max_message_size() -> usize {
 impl WebSocketConfig {
     fn from_env() -> Result<Self, ConfigError> {
         let path = std::env::var("LINE_PROXY_WS_PATH").unwrap_or_else(|_| default_ws_path());
+        let path = ensure_leading_slash(&path);
 
         let api_key = std::env::var("LINE_PROXY_API_KEY").unwrap_or_default();
 
