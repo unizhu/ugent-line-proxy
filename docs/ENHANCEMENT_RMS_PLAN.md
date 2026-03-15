@@ -1,8 +1,65 @@
 # UGENT-LINE-PROXY Relationship Management System
 
-**Enhancement Plan v1.0**  
+**Enhancement Plan v2.0**  
 **Date**: 2026-03-11  
-**Status**: Draft for Review
+**Status**: Updated with Latest Crate Versions & Rust 2024 Best Practices
+
+---
+
+## 0. Latest Crate Versions (2026-03)
+
+| Crate | Current | Latest | Notes |
+|-------|---------|--------|-------|
+| **Rust Edition** | 2021 | **2024** | Rust 1.85+ - async closures, RPIT lifetime capture |
+| **tokio** | 1.x | **1.50** | Multi-threaded async runtime |
+| **axum** | 0.7.x | **0.8.x** | Path syntax changed `/:id` → `/{id}` |
+| **tower** | 0.4.x | **0.5.x** | Service abstraction layer |
+| **tower-http** | 0.5.x | **0.6.8** | HTTP middleware (trace, cors, compression) |
+| **reqwest** | 0.12.x | **0.12.x** | HTTP client with connection pooling |
+| **serde** | 1.0.x | **1.0.x** | Serialization framework |
+| **serde_json** | 1.0.x | **1.0.149** | JSON with new Żmij float algorithm |
+| **rusqlite** | 0.31.x | **0.38.0** | SQLite bindings (statement cache optional now) |
+| **tokio-tungstenite** | 0.24.x | **0.28.0** | WebSocket async |
+| **subtle** | 2.6.x | **2.6.x** | Constant-time crypto comparison |
+| **thiserror** | 1.0.x | **2.0.x** | Error derive macros |
+| **tracing** | 0.1.x | **0.1.x** | Structured logging |
+
+### Rust 2024 Edition Key Changes
+
+```rust
+// 1. Async Closures (stabilized!)
+let fetch_data = async || {
+    client.get(url).send().await?.text().await
+};
+
+// 2. RPIT Lifetime Capture - impl Trait auto-captures lifetimes
+fn get_entity(&self, id: &str) -> impl Future<Output = Result<Entity>> {
+    // Lifetime auto-captured in Rust 2024
+    async move { ... }
+}
+
+// 3. use<...> syntax for explicit lifetime control
+fn selective_capture<'a, 'b>(x: &'a str, y: &'b str) 
+    -> impl Iterator<Item = &'a str> + use<'a> {
+    // Only capture 'a, not 'b
+}
+
+// 4. gen keyword reserved (future generators)
+```
+
+### Axum 0.8 Breaking Changes
+
+```rust
+// OLD (0.7.x)
+Router::new().route("/users/:id", get(user_handler))
+
+// NEW (0.8.x)
+Router::new().route("/users/{id}", get(user_handler))
+
+// Wildcard
+// OLD: /files/*path
+// NEW: /files/{*path}
+```
 
 ---
 
@@ -71,6 +128,8 @@ Current ugent-line-proxy uses "first-response-wins" ownership model for routing 
 
 ```rust
 /// LINE Entity Types
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LineEntityType {
     User,      // Individual user (1:1 chat)
     Group,     // LINE group
@@ -78,6 +137,7 @@ pub enum LineEntityType {
 }
 
 /// LINE Entity (Contact/Group/Room)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LineEntity {
     pub id: String,              // LINE ID (Uxxx, Rxxx, Cxxx)
     pub entity_type: LineEntityType,
@@ -89,6 +149,7 @@ pub struct LineEntity {
 }
 
 /// UGENT Client
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UgentClient {
     pub client_id: String,       // WebSocket client ID
     pub connected_at: i64,
@@ -98,6 +159,7 @@ pub struct UgentClient {
 }
 
 /// Relationship (Routing Rule)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relationship {
     pub id: i64,                 // Auto-increment ID
     pub line_entity_id: String,  // LINE user/group/room ID
@@ -111,6 +173,7 @@ pub struct Relationship {
 }
 
 /// Dispatch Rule (Computed from relationships + runtime state)
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DispatchRule {
     pub conversation_id: String,
     pub entity_type: LineEntityType,
@@ -182,14 +245,27 @@ pub mod api;
 pub mod cli;
 
 // src/rms/service.rs
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use crate::storage::Storage;
+use crate::ws_manager::WebSocketManager;
+use crate::line_api::LineApiClient;
+
 pub struct RelationshipManagerService {
     storage: Arc<Storage>,
     ws_manager: Arc<WebSocketManager>,
     line_client: LineApiClient,
-    config: Arc<Config>,
 }
 
 impl RelationshipManagerService {
+    pub fn new(
+        storage: Arc<Storage>,
+        ws_manager: Arc<WebSocketManager>,
+        line_client: LineApiClient,
+    ) -> Self {
+        Self { storage, ws_manager, line_client }
+    }
+
     // ========== Query Operations ==========
     
     /// Get all connected UGENT clients
@@ -252,6 +328,7 @@ impl RelationshipManagerService {
 
 // ========== Supporting Types ==========
 
+#[derive(Debug, Clone)]
 pub struct EntityFilter {
     pub entity_type: Option<LineEntityType>,
     pub has_relationship: Option<bool>,
@@ -260,15 +337,17 @@ pub struct EntityFilter {
     pub offset: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
     pub client_id: String,
     pub connected: bool,
     pub connected_at: Option<i64>,
     pub last_activity: i64,
     pub owned_conversations: usize,
-    pub metadata: Option<Value>,
+    pub metadata: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemStatus {
     pub connected_clients: usize,
     pub total_entities: usize,
@@ -279,6 +358,7 @@ pub struct SystemStatus {
     pub uptime_secs: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResult {
     pub added: usize,
     pub updated: usize,
@@ -290,24 +370,45 @@ pub struct SyncResult {
 
 ## 5. HTTP API Design
 
-### 5.1 REST Endpoints
+### 5.1 REST Endpoints (Axum 0.8 Syntax)
 
-```
-GET    /api/rms/status                    # System status summary
-GET    /api/rms/clients                   # List all clients
-GET    /api/rms/clients/:id               # Get specific client
-GET    /api/rms/entities                  # List LINE entities
-GET    /api/rms/entities/:id              # Get specific entity
-POST   /api/rms/entities/:id/refresh      # Refresh from LINE API
-GET    /api/rms/relationships             # List all relationships
-GET    /api/rms/relationships/:entity_id  # Get relationship for entity
-POST   /api/rms/relationships             # Create/update relationship
-DELETE /api/rms/relationships/:entity_id  # Remove relationship
-GET    /api/rms/dispatch-rules            # List dispatch rules
-GET    /api/rms/dispatch-rules/:conv_id   # Get dispatch rule
-POST   /api/rms/import                    # Import relationships
-GET    /api/rms/export                    # Export relationships
-POST   /api/rms/sync                      # Sync with runtime
+```rust
+use axum::{
+    Router,
+    routing::{get, post, delete},
+};
+
+pub fn rms_routes(rms: Arc<RelationshipManagerService>) -> Router {
+    Router::new()
+        // Status
+        .route("/api/rms/status", get(get_status))
+        
+        // Clients
+        .route("/api/rms/clients", get(get_clients))
+        .route("/api/rms/clients/{id}", get(get_client))
+        
+        // Entities
+        .route("/api/rms/entities", get(get_entities))
+        .route("/api/rms/entities/{id}", get(get_entity))
+        .route("/api/rms/entities/{id}/refresh", post(refresh_entity))
+        
+        // Relationships
+        .route("/api/rms/relationships", get(get_relationships))
+        .route("/api/rms/relationships/{entity_id}", get(get_relationship))
+        .route("/api/rms/relationships", post(set_relationship))
+        .route("/api/rms/relationships/{entity_id}", delete(remove_relationship))
+        
+        // Dispatch Rules
+        .route("/api/rms/dispatch-rules", get(get_dispatch_rules))
+        .route("/api/rms/dispatch-rules/{conv_id}", get(get_dispatch_rule))
+        
+        // Import/Export
+        .route("/api/rms/import", post(import_relationships))
+        .route("/api/rms/export", get(export_relationships))
+        .route("/api/rms/sync", post(sync_ownership))
+        
+        .with_state(rms)
+}
 ```
 
 ### 5.2 API Request/Response Examples
@@ -492,9 +593,74 @@ $ rms rules list
 
 ---
 
-## 7. Integration Points
+## 7. Cargo.toml Dependencies (Updated 2026-03)
 
-### 7.1 WebSocket Protocol Extensions
+```toml
+[package]
+name = "ugent-line-proxy"
+version = "0.1.0"
+edition = "2024"  # Rust 2024 Edition
+rust-version = "1.85"
+
+[dependencies]
+# Async Runtime
+tokio = { version = "1.50", features = ["full"] }
+
+# Web Framework (Axum 0.8 with new path syntax)
+axum = { version = "0.8", features = ["macros", "ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-gzip", "request-id"] }
+
+# HTTP Client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# WebSocket
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database
+rusqlite = { version = "0.38", features = ["bundled"] }
+
+# Security
+subtle = "2.6"
+
+# Error Handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI (for rms-cli binary)
+clap = { version = "4.5", features = ["derive"] }
+tabled = "0.18"
+comfy-table = "7.1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utils
+uuid = { version = "1.7", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.10"
+
+[[bin]]
+name = "rms-cli"
+path = "src/bin/rms-cli.rs"
+```
+
+---
+
+## 8. Integration Points
+
+### 8.1 WebSocket Protocol Extensions
 
 ```json
 // Client metadata on connect
@@ -517,13 +683,13 @@ $ rms rules list
 }
 ```
 
-### 7.2 Webhook Integration
+### 8.2 Webhook Integration
 
 - Auto-create/update `line_entities` on message received
 - Respect manual relationships over auto-detected ones
 - Log dispatch history for analytics
 
-### 7.3 Environment Variables
+### 8.3 Environment Variables
 
 ```bash
 # RMS Configuration
@@ -535,7 +701,7 @@ RMS_AUTO_SYNC_INTERVAL=300     # Auto-sync interval in seconds (0=disabled)
 
 ---
 
-## 8. Implementation Plan
+## 9. Implementation Plan
 
 ### Phase 1: Core Service (2-3 days)
 1. Create `src/rms/` module structure
@@ -545,15 +711,15 @@ RMS_AUTO_SYNC_INTERVAL=300     # Auto-sync interval in seconds (0=disabled)
 5. Unit tests for service layer
 
 ### Phase 2: HTTP API (1-2 days)
-1. Create `/api/rms/*` routes
+1. Create `/api/rms/*` routes with Axum 0.8
 2. Implement authentication/authorization
 3. Add OpenAPI documentation
 4. Integration tests
 
 ### Phase 3: CLI Tool (1-2 days)
 1. Create `src/bin/rms-cli.rs`
-2. Implement all CLI commands
-3. Add pretty table formatting
+2. Implement all CLI commands with clap 4.5
+3. Add pretty table formatting with comfy-table
 4. Shell completion scripts
 
 ### Phase 4: Integration (1 day)
@@ -569,7 +735,7 @@ RMS_AUTO_SYNC_INTERVAL=300     # Auto-sync interval in seconds (0=disabled)
 
 ---
 
-## 9. Code Structure
+## 10. Code Structure
 
 ```
 ugent-line-proxy/
@@ -591,7 +757,7 @@ ugent-line-proxy/
 
 ---
 
-## 10. Security Considerations
+## 11. Security Considerations
 
 1. **API Authentication**: Require API key for all RMS endpoints
 2. **Authorization**: Consider role-based access (view vs modify)
@@ -601,7 +767,7 @@ ugent-line-proxy/
 
 ---
 
-## 11. Open Questions
+## 12. Open Questions
 
 1. **Multi-Client Priority**: Should we support multiple clients per entity with priority order?
 2. **Fallback Behavior**: When assigned client disconnects, should we:
@@ -613,7 +779,7 @@ ugent-line-proxy/
 
 ---
 
-## 12. Success Criteria
+## 13. Success Criteria
 
 - [ ] Can view all LINE entities and their relationships via CLI
 - [ ] Can view all connected UGENT clients via CLI
@@ -623,6 +789,8 @@ ugent-line-proxy/
 - [ ] Manual relationships override auto-detected ones
 - [ ] All operations logged for audit
 - [ ] Documentation complete
+- [ ] All code passes `cargo clippy -- -D warnings`
+- [ ] All tests pass with `cargo test`
 
 ---
 
@@ -631,3 +799,4 @@ ugent-line-proxy/
 2. Priority of implementation phases
 3. Answers to open questions
 4. Any architecture concerns
+5. Rust 2024 edition migration strategy
