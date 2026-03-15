@@ -21,6 +21,7 @@
 //! - @mention detection in groups
 //! - Media content download proxy
 //! - Outbound artifact (file/image) sending
+//! - Relationship Management System (RMS) for visibility and control
 //!
 //! # Quick Start
 //!
@@ -34,12 +35,11 @@
 //! ugent-line-proxy
 //! ```
 
-#![allow(dead_code)]
-
 pub mod broker;
 pub mod config;
 pub mod error;
 pub mod line_api;
+pub mod rms;
 pub mod storage;
 pub mod types;
 pub mod webhook;
@@ -48,6 +48,7 @@ pub mod ws_manager;
 pub use broker::MessageBroker;
 pub use config::Config;
 pub use error::ProxyError;
+pub use rms::{RelationshipManagerService, RmsError, RmsStorage};
 pub use line_api::LineApiClient;
 pub use storage::Storage;
 pub use types::*;

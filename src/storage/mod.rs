@@ -157,6 +157,11 @@ impl Storage {
 
         Ok(())
     }
+
+    /// Clone the database connection for use by other modules
+    pub fn connection_clone(&self) -> Arc<Mutex<Connection>> {
+        Arc::clone(&self.conn)
+    }
 }
 
 #[cfg(test)]

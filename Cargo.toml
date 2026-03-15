@@ -47,6 +47,10 @@ parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
+# CLI (for rms-cli)
+clap = { version = "4.5", features = ["derive"] }
+comfy-table = "7.1"
+
 # Error handling
 thiserror = "2"
 anyhow = "1"
@@ -69,6 +73,10 @@ tempfile = "3"
 [[bin]]
 name = "ugent-line-proxy"
 path = "src/main.rs"
+
+[[bin]]
+name = "rms-cli"
+path = "src/bin/rms-cli.rs"
 
 # Debian package configuration
 [package.metadata.deb]

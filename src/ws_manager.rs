@@ -337,6 +337,72 @@ impl WebSocketManager {
     pub fn metrics(&self) -> Option<&MetricsStore> {
         self.storage.as_ref().map(|s| s.metrics())
     }
+
+    // =========================================================================
+    // RMS Integration Methods
+    // =========================================================================
+
+    /// Check if a client is currently connected
+    pub fn is_client_connected(&self, client_id: &str) -> bool {
+        self.clients.contains_key(client_id)
+    }
+
+    /// Get the time when a client connected (if connected)
+    pub fn get_client_connected_time(&self, client_id: &str) -> Option<i64> {
+        let infos = self.client_infos.read();
+        infos.get(client_id).map(|info| {
+            // Calculate seconds since connection
+            let elapsed = info.connected_at.elapsed();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            now - elapsed.as_secs() as i64
+        })
+    }
+
+    /// Get client metadata (if available)
+    pub fn get_client_metadata(&self, _client_id: &str) -> Option<serde_json::Value> {
+        // Currently not storing metadata in client_infos
+        None
+    }
+
+    /// Set conversation owner (for RMS manual override)
+    pub fn set_conversation_owner(&self, conversation_id: &str, client_id: &str) {
+        let mut owners = self.conversation_owners.write();
+        owners.insert(conversation_id.to_string(), client_id.to_string());
+
+        let mut client_convs = self.client_conversations.write();
+        client_convs
+            .entry(client_id.to_string())
+            .or_default()
+            .insert(conversation_id.to_string());
+
+        info!(
+            "Set conversation {} owner to {} (manual)",
+            conversation_id, client_id
+        );
+    }
+
+    /// Clear conversation owner (for RMS)
+    pub fn clear_conversation_owner(&self, conversation_id: &str) {
+        let mut owners = self.conversation_owners.write();
+        if let Some(client_id) = owners.remove(conversation_id) {
+            let mut client_convs = self.client_conversations.write();
+            if let Some(convs) = client_convs.get_mut(&client_id) {
+                convs.remove(conversation_id);
+            }
+            info!(
+                "Cleared conversation {} owner (was {})",
+                conversation_id, client_id
+            );
+        }
+    }
+
+    /// Get all conversation owners
+    pub fn get_all_conversation_owners(&self) -> std::collections::HashMap<String, String> {
+        self.conversation_owners.read().clone()
+    }
 }
 
 /// Broadcast error
