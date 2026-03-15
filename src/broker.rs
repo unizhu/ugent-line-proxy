@@ -40,6 +40,8 @@ pub struct MessageBroker {
     /// LINE API client
     line_client: LineApiClient,
     /// HTTP client for artifact downloads
+    /// TODO: Use this for downloading media artifacts from LINE
+    #[allow(dead_code)]
     http_client: Client,
     /// Pending messages awaiting response (original_id -> PendingMessage)
     pending_messages: RwLock<HashMap<String, PendingMessage>>,

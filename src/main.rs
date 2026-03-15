@@ -16,7 +16,11 @@ use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ugent_line_proxy::{
-    broker::MessageBroker, config::Config, handle_webhook, storage::Storage,
+    broker::MessageBroker,
+    config::Config,
+    handle_webhook,
+    rms::{rms_routes, RelationshipManagerService},
+    storage::Storage,
     ws_manager::WebSocketManager,
 };
 
@@ -55,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create WebSocket manager
-    let ws_manager = if config.storage.enabled {
+    let (ws_manager, storage_arc) = if config.storage.enabled {
         let storage_path = config.storage.path.clone();
         match Storage::with_optional_path(storage_path) {
             Ok(storage) => {
@@ -64,27 +68,51 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     info!("Persistent storage enabled at ~/.ugent/line-plugin/");
                 }
-                Arc::new(WebSocketManager::with_storage(config.clone(), storage))
+                let storage_arc = Arc::new(storage);
+                // Create ws_manager that shares the storage
+                let ws_manager = Arc::new(WebSocketManager::new(config.clone()));
+                (ws_manager, Some(storage_arc))
             }
             Err(e) => {
                 warn!("Failed to initialize storage: {}. Falling back to in-memory mode.", e);
-                Arc::new(WebSocketManager::new(config.clone()))
+                (Arc::new(WebSocketManager::new(config.clone())), None)
             }
         }
     } else {
-        Arc::new(WebSocketManager::new(config.clone()))
+        (Arc::new(WebSocketManager::new(config.clone())), None)
     };
     // Create message broker
     let broker = Arc::new(MessageBroker::new(config.clone(), ws_manager.clone()));
 
-    // Build router
-    let app = Router::new()
+    // Create RMS service for relationship management (optional if storage available)
+    let line_client = ugent_line_proxy::line_api::LineApiClient::new(
+        config.line.channel_access_token.clone(),
+    );
+
+    // Build main router
+    let mut app = Router::new()
         // Health check
         .route("/health", get(health_check))
         // LINE webhook
         .route(&config.line.webhook_path, post(handle_webhook))
         // WebSocket endpoint
-        .route(&config.websocket.path, get(websocket_handler))
+        .route(&config.websocket.path, get(websocket_handler));
+
+    // Add RMS routes if storage is available
+    if let Some(storage) = storage_arc {
+        let rms_service = Arc::new(RelationshipManagerService::new(
+            storage,
+            ws_manager.clone(),
+            line_client,
+        ));
+        info!("RMS service initialized");
+        app = app.nest("/api/rms", rms_routes().with_state(rms_service));
+    } else {
+        warn!("RMS service disabled - no storage available");
+    }
+
+    // Add CORS and state
+    let app = app
         // CORS
         .layer(
             CorsLayer::new()

@@ -344,7 +344,7 @@ fn print_client_detail(client: &ClientInfo) {
         "  Connected At: {}",
         client
             .connected_at
-            .map(|t| format_timestamp(t))
+            .map(format_timestamp)
             .unwrap_or_else(|| "N/A".to_string())
     );
     println!("  Last Activity: {}", format_timestamp(client.last_activity));
@@ -393,7 +393,7 @@ fn print_entity_detail(entity: &LineEntity) {
         "  Last Message: {}",
         entity
             .last_message_at
-            .map(|t| format_timestamp(t))
+            .map(format_timestamp)
             .unwrap_or_else(|| "N/A".to_string())
     );
     println!("  Created: {}", format_timestamp(entity.created_at));
@@ -485,7 +485,7 @@ fn print_dispatch_rule_detail(rule: &DispatchRule) {
     println!(
         "  Last Routed: {}",
         rule.last_routed_at
-            .map(|t| format_timestamp(t))
+            .map(format_timestamp)
             .unwrap_or_else(|| "N/A".to_string())
     );
     println!("  Message Count: {}", rule.message_count);

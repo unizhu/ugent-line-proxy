@@ -88,37 +88,37 @@ pub struct PaginatedResponse<T> {
 }
 
 /// Create RMS API routes (Axum 0.8 syntax with {id} path params)
-pub fn rms_routes(rms: RmsState) -> Router {
+/// Note: Caller must call .with_state(rms) on the returned router
+pub fn rms_routes() -> Router<RmsState> {
     Router::new()
         // Status
-        .route("/api/rms/status", get(get_status))
+        .route("/status", get(get_status))
         // Clients
-        .route("/api/rms/clients", get(get_clients))
-        .route("/api/rms/clients/{id}", get(get_client))
+        .route("/clients", get(get_clients))
+        .route("/clients/{id}", get(get_client))
         // Entities
-        .route("/api/rms/entities", get(get_entities))
-        .route("/api/rms/entities/{id}", get(get_entity))
-        .route("/api/rms/entities/{id}/refresh", post(refresh_entity))
+        .route("/entities", get(get_entities))
+        .route("/entities/{id}", get(get_entity))
+        .route("/entities/{id}/refresh", post(refresh_entity))
         // Relationships
-        .route("/api/rms/relationships", get(get_relationships))
-        .route("/api/rms/relationships/{entity_id}", get(get_relationship))
-        .route("/api/rms/relationships", post(set_relationship))
+        .route("/relationships", get(get_relationships))
+        .route("/relationships", post(set_relationship))
+        .route("/relationships/{entity_id}", get(get_relationship))
         .route(
-            "/api/rms/relationships/{entity_id}",
+            "/relationships/{entity_id}",
             delete(remove_relationship),
         )
         // Dispatch Rules
-        .route("/api/rms/dispatch-rules", get(get_dispatch_rules))
+        .route("/dispatch-rules", get(get_dispatch_rules))
         .route(
-            "/api/rms/dispatch-rules/{conv_id}",
+            "/dispatch-rules/{conv_id}",
             get(get_dispatch_rule),
         )
         // Import/Export
-        .route("/api/rms/import", post(import_relationships))
-        .route("/api/rms/export", get(export_relationships))
-        .route("/api/rms/sync", post(sync_ownership))
-        .route("/api/rms/clear", post(clear_manual_relationships))
-        .with_state(rms)
+        .route("/import", post(import_relationships))
+        .route("/export", get(export_relationships))
+        .route("/sync", post(sync_ownership))
+        .route("/clear", post(clear_manual_relationships))
 }
 
 // ========== Status ==========

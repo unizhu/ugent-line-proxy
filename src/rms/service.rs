@@ -20,7 +20,8 @@ use crate::ws_manager::WebSocketManager;
 pub struct RelationshipManagerService {
     /// RMS-specific storage
     rms_storage: RmsStorage,
-    /// Main storage reference (for pending messages)
+    /// Main storage reference (for future use with pending messages)
+    #[allow(dead_code)]
     storage: Arc<Storage>,
     /// WebSocket manager reference
     ws_manager: Arc<WebSocketManager>,
