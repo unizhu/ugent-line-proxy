@@ -54,17 +54,29 @@ anyhow = "1"
 # Configuration
 dotenvy = "0.15"
 
+# PostgreSQL (optional, behind feature flag)
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
+
 # Storage (SQLite persistence)
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "6"
 
+# Async database trait
+async-trait = "0.1"
+
+# Retry with backoff
+backon = "1.6"
+
 [features]
-default = []
+default = ["sqlite"]
+sqlite = []
+postgres = ["dep:sqlx"]
 
 [dev-dependencies]
 tokio-test = "0.4"
 wiremock = "0.6"
 tempfile = "3"
+temp-env = "0.3"
 
 [[bin]]
 name = "ugent-line-proxy"

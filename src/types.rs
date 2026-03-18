@@ -99,6 +99,12 @@ pub struct ProxyMessage {
     pub webhook_event_id: String,
     /// Source type (user/group/room)
     pub source_type: SourceType,
+    /// Sender display name (resolved from contacts cache or LINE API)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_name: Option<String>,
+    /// Sender profile picture URL
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_picture_url: Option<String>,
 }
 
 impl ProxyMessage {
@@ -124,6 +130,8 @@ impl ProxyMessage {
             mark_as_read_token: event.message.mark_as_read_token(),
             webhook_event_id: event.webhook_event_id.clone(),
             source_type: source.source_type(),
+            sender_name: None,
+            sender_picture_url: None,
         }
     }
 
