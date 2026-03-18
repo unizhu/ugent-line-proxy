@@ -256,7 +256,9 @@ impl LineApiClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Content download failed: {} - {}", status, error_text);
-            return Err(LineApiError::DownloadFailed(format!("{status}: {error_text}")));
+            return Err(LineApiError::DownloadFailed(format!(
+                "{status}: {error_text}"
+            )));
         }
 
         // Get content type
@@ -292,7 +294,9 @@ impl LineApiClient {
 
         let status = response.status();
         if !status.is_success() {
-            return Err(LineApiError::DownloadFailed(format!("Preview download failed: {status}")));
+            return Err(LineApiError::DownloadFailed(format!(
+                "Preview download failed: {status}"
+            )));
         }
 
         let bytes = response.bytes().await?;

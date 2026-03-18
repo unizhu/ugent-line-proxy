@@ -8,7 +8,10 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use super::storage::RmsStorage;
-use super::types::{ClientInfo, RmsError, EntityFilter, LineEntity, Relationship, DispatchRule, SystemStatus, LineEntityType, SyncResult, RelationshipImport, ImportResult};
+use super::types::{
+    ClientInfo, DispatchRule, EntityFilter, ImportResult, LineEntity, LineEntityType, Relationship,
+    RelationshipImport, RmsError, SyncResult, SystemStatus,
+};
 use crate::line_api::LineApiClient;
 use crate::storage::Storage;
 use crate::ws_manager::WebSocketManager;
@@ -144,10 +147,7 @@ impl RelationshipManagerService {
     }
 
     /// Get relationship for a specific entity
-    pub fn get_relationship(
-        &self,
-        entity_id: &str,
-    ) -> Result<Option<Relationship>, RmsError> {
+    pub fn get_relationship(&self, entity_id: &str) -> Result<Option<Relationship>, RmsError> {
         self.rms_storage
             .get_relationship(entity_id)
             .map_err(Into::into)

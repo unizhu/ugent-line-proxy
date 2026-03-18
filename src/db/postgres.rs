@@ -7,20 +7,51 @@ use crate::db::DatabaseBackend;
 use crate::db::config::DataConfig;
 use crate::db::contacts::ContactRecord;
 use crate::db::error::DbError;
-use crate::db::groups::{GroupMemberRecord, GroupRecord};
+use crate::db::groups::GroupRecord;
 use crate::db::inbound_queue::InboundQueueEntry;
 use crate::db::messages::{DeliveryStatus, MessageRecord};
 use crate::db::metrics::MetricRecord;
-use crate::db::migration::{CURRENT_SCHEMA_VERSION, V2_MIGRATION_POSTGRES};
+use crate::db::migration::V2_MIGRATION_POSTGRES;
 use crate::db::outbound_queue::OutboundQueueEntry;
 use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
+use sqlx::Row;
 use sqlx::postgres::PgPoolOptions;
 
 /// PostgreSQL backend using sqlx
 pub struct PostgresBackend {
     pool: PgPool,
+}
+
+fn message_record_from_row(row: &sqlx::postgres::PgRow) -> MessageRecord {
+    MessageRecord {
+        id: row.get("id"),
+        direction: row.get("direction"),
+        conversation_id: row.get("conversation_id"),
+        source_type: row.get("source_type"),
+        sender_id: row.get("sender_id"),
+        message_type: row.get("message_type"),
+        text_content: row.get("text_content"),
+        message_json: row.get("message_json"),
+        media_content_json: row.get("media_content_json"),
+        reply_token: row.get("reply_token"),
+        quote_token: row.get("quote_token"),
+        webhook_event_id: row.get("webhook_event_id"),
+        line_timestamp: row.get("line_timestamp"),
+        received_at: row.get("received_at"),
+        delivered_at: row.get("delivered_at"),
+        delivery_status: {
+            let s: String = row.get("delivery_status");
+            DeliveryStatus::parse(&s).unwrap_or(DeliveryStatus::Pending)
+        },
+        retry_count: row.get("retry_count"),
+        last_retry_at: row.get("last_retry_at"),
+        error_message: row.get("error_message"),
+        ugent_request_id: row.get("ugent_request_id"),
+        ugent_correlation_id: row.get("ugent_correlation_id"),
+        created_at: row.get("created_at"),
+    }
 }
 
 impl PostgresBackend {
@@ -150,7 +181,7 @@ impl PostgresBackend {
 #[async_trait]
 impl DatabaseBackend for PostgresBackend {
     async fn ping(&self) -> Result<bool, DbError> {
-        sqlx::query("SELECT 1").execute(&self.pool).await.is_ok()
+        Ok(sqlx::query("SELECT 1").execute(&self.pool).await.is_ok())
     }
 
     async fn run_maintenance(&self) -> Result<(), DbError> {
@@ -519,66 +550,21 @@ impl DatabaseBackend for PostgresBackend {
     }
 
     async fn get_message(&self, id: &str) -> Result<Option<MessageRecord>, DbError> {
-        let row: Option<(
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i64,
-        )> = sqlx::query_as(
+        const SQL: &str =
             "SELECT id, direction, conversation_id, source_type, sender_id, message_type,
                         text_content, message_json, media_content_json, reply_token, quote_token,
                         webhook_event_id, line_timestamp, received_at, delivered_at,
                         delivery_status, retry_count, last_retry_at, error_message,
                         ugent_request_id, ugent_correlation_id, created_at
-                 FROM messages WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| DbError::Query(e.to_string()))?;
+                 FROM messages WHERE id = $1";
 
-        Ok(row.map(|r| MessageRecord {
-            id: r.0,
-            direction: r.1,
-            conversation_id: r.2,
-            source_type: r.3,
-            sender_id: r.4,
-            message_type: r.5,
-            text_content: r.6,
-            message_json: r.7,
-            media_content_json: r.8,
-            reply_token: r.9,
-            quote_token: r.10,
-            webhook_event_id: r.11,
-            line_timestamp: r.12,
-            received_at: r.13,
-            delivered_at: r.14,
-            delivery_status: DeliveryStatus::parse(&r.15).unwrap_or(DeliveryStatus::Pending),
-            retry_count: r.16,
-            last_retry_at: r.17,
-            error_message: r.18,
-            ugent_request_id: r.19,
-            ugent_correlation_id: r.20,
-            created_at: r.21,
-        }))
+        let row = sqlx::query(SQL)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| DbError::Query(e.to_string()))?;
+
+        Ok(row.map(|r| message_record_from_row(&r)))
     }
 
     async fn list_messages(
@@ -588,90 +574,45 @@ impl DatabaseBackend for PostgresBackend {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<MessageRecord>, DbError> {
-        let rows: Vec<(
-            String,
-            String,
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            i64,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            i64,
-        )> = if let Some(dir) = direction {
-            sqlx::query_as(
-                "SELECT id, direction, conversation_id, source_type, sender_id, message_type,
+        const SQL_FILTERED: &str =
+            "SELECT id, direction, conversation_id, source_type, sender_id, message_type,
                         text_content, message_json, media_content_json, reply_token, quote_token,
                         webhook_event_id, line_timestamp, received_at, delivered_at,
                         delivery_status, retry_count, last_retry_at, error_message,
                         ugent_request_id, ugent_correlation_id, created_at
                  FROM messages WHERE conversation_id = $1 AND direction = $2
-                 ORDER BY received_at DESC LIMIT $3 OFFSET $4",
-            )
-            .bind(conversation_id)
-            .bind(dir)
-            .bind(limit as i64)
-            .bind(offset as i64)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?
-        } else {
-            sqlx::query_as(
-                "SELECT id, direction, conversation_id, source_type, sender_id, message_type,
+                 ORDER BY received_at DESC LIMIT $3 OFFSET $4";
+        const SQL_UNFILTERED: &str =
+            "SELECT id, direction, conversation_id, source_type, sender_id, message_type,
                         text_content, message_json, media_content_json, reply_token, quote_token,
                         webhook_event_id, line_timestamp, received_at, delivered_at,
                         delivery_status, retry_count, last_retry_at, error_message,
                         ugent_request_id, ugent_correlation_id, created_at
                  FROM messages WHERE conversation_id = $1
-                 ORDER BY received_at DESC LIMIT $2 OFFSET $3",
-            )
-            .bind(conversation_id)
-            .bind(limit as i64)
-            .bind(offset as i64)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| DbError::Query(e.to_string()))?
+                 ORDER BY received_at DESC LIMIT $2 OFFSET $3";
+
+        let rows = if let Some(dir) = direction {
+            sqlx::query(SQL_FILTERED)
+                .bind(conversation_id)
+                .bind(dir)
+                .bind(limit as i64)
+                .bind(offset as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?
+        } else {
+            sqlx::query(SQL_UNFILTERED)
+                .bind(conversation_id)
+                .bind(limit as i64)
+                .bind(offset as i64)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?
         };
 
         Ok(rows
             .into_iter()
-            .map(|r| MessageRecord {
-                id: r.0,
-                direction: r.1,
-                conversation_id: r.2,
-                source_type: r.3,
-                sender_id: r.4,
-                message_type: r.5,
-                text_content: r.6,
-                message_json: r.7,
-                media_content_json: r.8,
-                reply_token: r.9,
-                quote_token: r.10,
-                webhook_event_id: r.11,
-                line_timestamp: r.12,
-                received_at: r.13,
-                delivered_at: r.14,
-                delivery_status: DeliveryStatus::parse(&r.15).unwrap_or(DeliveryStatus::Pending),
-                retry_count: r.16,
-                last_retry_at: r.17,
-                error_message: r.18,
-                ugent_request_id: r.19,
-                ugent_correlation_id: r.20,
-                created_at: r.21,
-            })
+            .map(|r| message_record_from_row(&r))
             .collect())
     }
 

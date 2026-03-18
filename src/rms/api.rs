@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::service::RelationshipManagerService;
-use super::types::{RelationshipImport, SystemStatus, ClientInfo, EntityFilter, LineEntityType, LineEntity, Relationship, DispatchRule, ImportResult, SyncResult};
+use super::types::{
+    ClientInfo, DispatchRule, EntityFilter, ImportResult, LineEntity, LineEntityType, Relationship,
+    RelationshipImport, SyncResult, SystemStatus,
+};
 
 /// RMS API state
 pub type RmsState = Arc<RelationshipManagerService>;

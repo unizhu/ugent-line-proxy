@@ -7,7 +7,10 @@ use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use std::io::{self, Read};
 
 use super::service::RelationshipManagerService;
-use super::types::{EntityFilter, LineEntityType, RelationshipImport, SystemStatus, ClientInfo, LineEntity, Relationship, DispatchRule};
+use super::types::{
+    ClientInfo, DispatchRule, EntityFilter, LineEntity, LineEntityType, Relationship,
+    RelationshipImport, SystemStatus,
+};
 
 /// RMS CLI - Relationship Management System
 #[derive(Parser, Debug)]
@@ -203,12 +206,10 @@ async fn execute(
                 let relationships = rms.get_relationships()?;
                 print_relationships(&relationships);
             }
-            RelationshipCommands::Show { entity_id } => {
-                match rms.get_relationship(&entity_id)? {
-                    Some(rel) => print_relationship_detail(&rel),
-                    None => println!("Relationship not found for entity: {entity_id}"),
-                }
-            }
+            RelationshipCommands::Show { entity_id } => match rms.get_relationship(&entity_id)? {
+                Some(rel) => print_relationship_detail(&rel),
+                None => println!("Relationship not found for entity: {entity_id}"),
+            },
             RelationshipCommands::Set {
                 entity_id,
                 client_id,
@@ -530,6 +531,8 @@ fn print_dispatch_rule_detail(rule: &DispatchRule) {
 }
 
 fn format_timestamp(ts: i64) -> String {
-    chrono::DateTime::from_timestamp(ts, 0)
-        .map_or_else(|| ts.to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+    chrono::DateTime::from_timestamp(ts, 0).map_or_else(
+        || ts.to_string(),
+        |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+    )
 }

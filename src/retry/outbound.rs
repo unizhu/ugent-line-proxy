@@ -334,18 +334,9 @@ mod tests {
 
         // Each delay should be roughly: initial * 2^(attempt-1)
         // attempt 1: 1s, attempt 2: 2s, attempt 3: 4s
-        assert!(
-            (900..=1100).contains(&d1),
-            "attempt 1 delay ~1s, got {d1}"
-        );
-        assert!(
-            (1900..=2100).contains(&d2),
-            "attempt 2 delay ~2s, got {d2}"
-        );
-        assert!(
-            (3900..=4100).contains(&d3),
-            "attempt 3 delay ~4s, got {d3}"
-        );
+        assert!((900..=1100).contains(&d1), "attempt 1 delay ~1s, got {d1}");
+        assert!((1900..=2100).contains(&d2), "attempt 2 delay ~2s, got {d2}");
+        assert!((3900..=4100).contains(&d3), "attempt 3 delay ~4s, got {d3}");
 
         // Verify exponential growth
         assert!(d2 > d1);

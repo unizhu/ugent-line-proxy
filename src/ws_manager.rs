@@ -256,9 +256,7 @@ impl WebSocketManager {
     /// Check if a specific client owns a conversation
     pub fn is_conversation_owner(&self, conversation_id: &str, client_id: &str) -> bool {
         let owners = self.conversation_owners.read();
-        owners
-            .get(conversation_id)
-            .is_some_and(|o| o == client_id)
+        owners.get(conversation_id).is_some_and(|o| o == client_id)
     }
 
     /// Release all conversations owned by a client (on disconnect).
@@ -434,7 +432,8 @@ pub fn websocket_handler(
 }
 
 /// Handle WebSocket upgrade request with broker for response handling
-    pub fn websocket_handler_with_broker(    ws: WebSocketUpgrade,
+pub fn websocket_handler_with_broker(
+    ws: WebSocketUpgrade,
     State(ws_manager): State<Arc<WebSocketManager>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     broker: Arc<MessageBroker>,
