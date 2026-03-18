@@ -126,6 +126,38 @@ See [WebSocket Protocol](./WEBSOCKET_PROTOCOL.md) for message formats.
 | `LINE_PROXY_LOG_FORMAT` | string | `json` | Log format (json/pretty) |
 | `LINE_PROXY_LOG_FILE` | path | (none) | Log file path |
 
+#### Database Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LINE_PROXY_DB_TYPE` | string | `sqlite` | Database backend (`sqlite` or `postgres`) |
+| `LINE_PROXY_DB_URL` | string | (none) | PostgreSQL connection URL |
+| `LINE_PROXY_DB_MAX_CONNECTIONS` | number | `5` | PostgreSQL max connections |
+
+#### Storage (RMS) Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LINE_PROXY_STORAGE_ENABLED` | bool | `false` | Enable persistent RMS storage |
+| `LINE_PROXY_STORAGE_PATH` | path | `~/.ugent/line-plugin/` | Storage directory |
+
+#### Retry Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LINE_PROXY_RETRY_ENABLED` | bool | `false` | Enable retry system |
+| `LINE_PROXY_RETRY_MAX_ATTEMPTS` | number | `5` | Max retry attempts |
+| `LINE_PROXY_RETRY_INITIAL_DELAY_SECS` | number | `1` | Initial backoff delay |
+| `LINE_PROXY_RETRY_MAX_DELAY_SECS` | number | `300` | Maximum backoff delay |
+
+#### Data Retention Configuration
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `LINE_PROXY_RETENTION_ENABLED` | bool | `false` | Enable automatic cleanup |
+| `LINE_PROXY_RETENTION_MAX_AGE_DAYS` | number | `90` | Max message age in days |
+| `LINE_PROXY_RETENTION_CLEANUP_INTERVAL_SECS` | number | `3600` | Cleanup interval in seconds |
+
 ## LINE API Methods
 
 ### LineApiClient
@@ -443,4 +475,110 @@ pub enum LineApiError {
     InvalidResponse(String),
     InvalidReplyToken,
 }
+```
+
+## Database API
+
+### DatabaseBackend (feature: `sqlite` or `postgres`)
+
+```rust
+// Initialize database
+let db = DatabaseBackend::new(config).await?;
+
+// Store an inbound message
+db.store_inbound(&proxy_message).await?;
+
+// Store an outbound response
+db.store_outbound(&proxy_message, content).await?;
+
+// Get message history
+let messages = db.get_messages(conversation_id, limit, offset).await?;
+
+// Store contact
+db.store_contact(&contact_info).await?;
+
+// Get contact
+let contact = db.get_contact(user_id).await?;
+
+// Queue outbound message
+db.enqueue_outbound(&message).await?;
+
+// Get pending outbound messages
+let pending = db.get_pending_outbound(limit).await?;
+
+// Mark outbound as sent
+db.mark_outbound_sent(message_id).await?;
+
+// Run data retention cleanup
+db.cleanup_retention(max_age_days).await?;
+
+// Get database metrics
+let metrics = db.get_metrics().await?;
+
+// Close
+db.close().await?;
+```
+
+### Database Configuration
+
+```rust
+pub struct DbConfig {
+    pub db_type: DbType,        // SQLite or PostgreSQL
+    pub url: Option<String>,    // PostgreSQL connection URL
+    pub max_connections: u32,   // Connection pool size (PostgreSQL only)
+    pub retention_enabled: bool,
+    pub retention_max_age_days: u64,
+}
+```
+
+## Retry API
+
+### InboundRetryHandler
+
+```rust
+// Handle inbound message with retry
+let result = retry_handler.handle_inbound(proxy_message).await?;
+// Returns: InboundResult::Forwarded | Queued | Dropped
+```
+
+### OutboundRetryHandler
+
+```rust
+// Process pending outbound messages
+retry_handler.process_pending().await?;
+
+// Retry a specific failed message
+retry_handler.retry_message(message_id).await?;
+
+// Mark message as permanently failed
+retry_handler.mark_failed(message_id, reason).await?;
+```
+
+## RMS Storage API
+
+### MessageStorage
+
+```rust
+let storage = MessageStorage::new(config);
+
+// Initialize (create directories, load schema)
+storage.initialize().await?;
+
+// Store pending message
+storage.store_pending(message_id, proxy_message, ttl).await?;
+
+// Retrieve and remove pending message
+let msg = storage.get_pending(message_id).await?;
+
+// Store ownership mapping
+storage.store_ownership(user_id, group_id, platform).await?;
+
+// Lookup ownership
+let ownership = storage.get_ownership(user_id, platform).await?;
+
+// Check deduplication
+let is_dup = storage.is_duplicate(message_id).await?;
+
+// Get metrics
+let metrics = storage.get_metrics().await?;
 ```

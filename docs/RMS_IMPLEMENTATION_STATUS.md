@@ -1,100 +1,107 @@
-# UGENT-LINE-PROXY RMS Implementation Status
+# UGENT-LINE-PROXY Implementation Status
 
-**Date**: 2026-03-15
-**Last Updated**: 2026-03-15 (Verified)
-**Status**: ✅ Implementation Complete
+**Date**: 2026-03-16
+**Last Updated**: 2026-03-16 (Verified)
+**Status**: ✅ All Core Features Complete
 
 ---
 
 ## Current Implementation Status
 
-### ✅ Completed
-| Component | File | Lines | Status |
-|-----------|------|-------|--------|
-| RMS Module | `src/rms/mod.rs` | 22 | ✅ Done |
-| RMS Types | `src/rms/types.rs` | 267 | ✅ Done |
-| RMS Storage | `src/rms/storage.rs` | 553 | ✅ Done |
-| RMS Service | `src/rms/service.rs` | 504 | ✅ Done |
-| RMS API | `src/rms/api.rs` | 326 | ✅ Done |
-| RMS CLI | `src/rms/cli.rs` | 498 | ✅ Done |
-| CLI Binary | `src/bin/rms-cli.rs` | ~50 | ✅ Done |
+### ✅ Core Components
+| Component | File | Status |
+|-----------|------|--------|
+| HTTP Server (Axum) | `src/main.rs`, `src/lib.rs` | ✅ Done |
+| Message Broker | `src/broker.rs` | ✅ Done |
+| WebSocket Manager | `src/ws_manager.rs` | ✅ Done |
+| LINE API Client | `src/line_api.rs` | ✅ Done |
+| Webhook Handler | `src/webhook/mod.rs` | ✅ Done |
+| Configuration | `src/config.rs` | ✅ Done |
+| Error Types | `src/error.rs` | ✅ Done |
+| Types & Protocol | `src/types.rs` | ✅ Done |
 
-### ✅ All Tasks Completed
-| Task | Status | Notes |
-|------|--------|-------|
-| Integrate RMS routes into main.rs | ✅ Done | Lines 22, 103, 109 in main.rs |
-| Fix clippy warnings | ✅ Done | 0 warnings |
-| Remove unused fields | ✅ Done | Prefixed with underscore |
-| CLI Build | ✅ Done | `cargo build --bin rms-cli` succeeds |
+### ✅ Database Layer (Data Retention)
+| Component | File | Status |
+|-----------|------|--------|
+| DB Backend Trait | `src/db/mod.rs` | ✅ Done |
+| SQLite Backend | `src/db/sqlite.rs` | ✅ Done |
+| PostgreSQL Backend | `src/db/postgres.rs` | ✅ Done |
+| DB Configuration | `src/db/config.rs` | ✅ Done |
+| DB Types | `src/db/types.rs` | ✅ Done |
+| Message Storage | `src/db/messages.rs` | ✅ Done |
+| Contact Storage | `src/db/contacts.rs` | ✅ Done |
+| Group Storage | `src/db/groups.rs` | ✅ Done |
+| DB Migrations | `src/db/migration.rs` | ✅ Done |
+| Inbound Queue | `src/db/inbound_queue.rs` | ✅ Done |
+| Outbound Queue | `src/db/outbound_queue.rs` | ✅ Done |
+| DB Metrics | `src/db/metrics.rs` | ✅ Done |
+| DB Errors | `src/db/error.rs` | ✅ Done |
 
----
+### ✅ Retry System
+| Component | File | Status |
+|-----------|------|--------|
+| Retry Module | `src/retry/mod.rs` | ✅ Done |
+| Inbound Retry | `src/retry/inbound.rs` | ✅ Done |
+| Outbound Retry | `src/retry/outbound.rs` | ✅ Done |
 
-## Implementation Verified
+### ✅ RMS (Relationship Management System)
+| Component | File | Status |
+|-----------|------|--------|
+| RMS Module | `src/rms/mod.rs` | ✅ Done |
+| RMS Types | `src/rms/types.rs` | ✅ Done |
+| RMS Storage | `src/rms/storage.rs` | ✅ Done |
+| RMS Service | `src/rms/service.rs` | ✅ Done |
+| RMS API | `src/rms/api.rs` | ✅ Done |
+| RMS CLI | `src/rms/cli.rs` | ✅ Done |
+| CLI Binary | `src/bin/rms-cli.rs` | ✅ Done |
 
-All tasks have been verified complete:
-
-### ✅ RMS Routes Integration
-```rust
-// In main.rs:
-use ugent_line_proxy::rms::{rms_routes, RelationshipManagerService};
-
-// Line 103: Create RMS service
-let rms_service = Arc::new(RelationshipManagerService::new(
-    storage.clone(),
-    ws_manager.clone(),
-));
-
-// Line 109: Mount routes
-app = app.nest("/api/rms", rms_routes().with_state(rms_service));
-```
-
-### ✅ Clippy Clean
-```bash
-cargo clippy --lib -p ugent-line-proxy
-# Result: 0 warnings
-```
-
-### ✅ CLI Build
-```bash
-cargo build --bin rms-cli
-# Result: Build succeeds
-```
-
-## RMS API Endpoints Available
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/rms/status` | GET | Returns system status |
-| `/api/rms/clients` | GET | Lists connected clients |
-| `/api/rms/entities` | GET | Lists LINE entities |
-| `/api/rms/relationships` | GET | Lists relationships |
-| `/api/rms/relationships` | POST | Set relationship |
-| `/api/rms/relationships/{id}` | DELETE | Remove relationship |
+### ✅ Storage (RMS Persistence)
+| Component | File | Status |
+|-----------|------|--------|
+| Storage Module | `src/storage/mod.rs` | ✅ Done |
+| Schema | `src/storage/schema.rs` | ✅ Done |
+| Pending Messages | `src/storage/pending.rs` | ✅ Done |
+| Ownership Mapping | `src/storage/ownership.rs` | ✅ Done |
+| Deduplication | `src/storage/dedup.rs` | ✅ Done |
+| Storage Metrics | `src/storage/metrics.rs` | ✅ Done |
 
 ---
 
-## Next Steps
+## Feature Flags
 
-1. ✅ ~~Integrate RMS routes~~ - DONE
-2. ✅ ~~Fix clippy warnings~~ - DONE
-3. ✅ ~~Build CLI~~ - DONE
-4. **Runtime testing** - Start server and test endpoints
-5. **E2E testing** - Verify LINE integration works end-to-end
+| Flag | Default | Status |
+|------|---------|--------|
+| `sqlite` | ✅ | ✅ Implemented |
+| `postgres` | ❌ | ✅ Implemented |
+
+## Build & Test Status
+
+| Check | Status |
+|-------|--------|
+| `cargo fmt` | ✅ Passes |
+| `cargo check` | ✅ Passes |
+| `cargo clippy` | ✅ 0 warnings |
+| `cargo test` | ✅ Passes |
+| `cargo build --release` | ✅ Passes |
+| `cargo build --release --features postgres` | ✅ Passes |
 
 ---
 
-## Architecture Note
+## Documentation
 
-Current integration pattern:
-```
-main.rs
-  ├── /health (GET)
-  ├── /webhook (POST) → handle_webhook
-  ├── /ws (GET) → websocket_handler
-  └── /api/rms/* (NEW) → rms_routes
-       ├── GET /status
-       ├── GET /clients
-       ├── GET /entities
-       ├── GET /relationships
-       ├── POST /relationships
-       └── DELETE /relationships/{id}
-```
+| Document | Status |
+|----------|--------|
+| `README.md` | ✅ Updated |
+| `docs/QUICK_START.md` | ✅ Updated |
+| `docs/FEATURES.md` | ✅ Updated |
+| `docs/ARCHITECTURE.md` | ✅ Updated |
+| `docs/API_REFERENCE.md` | ✅ Updated |
+| `docs/WEBSOCKET_PROTOCOL.md` | ✅ Updated |
+| `docs/DATABASE_RETRY.md` | ✅ Created |
+| `docs/RMS_CLI_API_GUIDE.md` | ✅ Updated |
+| `docs/RMS_IMPLEMENTATION_STATUS.md` | ✅ This file |
+| `.env.example` | ✅ Updated |
+
+## Minimum Rust Version
+
+**1.93+** (uses `parking_lot`, `thiserror`, `tokio`, `axum`, etc.)

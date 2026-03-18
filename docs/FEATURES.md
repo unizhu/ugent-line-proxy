@@ -100,12 +100,12 @@ Send messages back to LINE users:
 {
   "type": "response",
   "original_id": "message-uuid",
-  "content": "Your response text here",
+  "content": "Hello!",
   "artifacts": []
 }
 ```
 
-**With Artifacts (Images/Audio/Video):**
+**With Artifacts (Images, Audio, Video):**
 ```json
 {
   "type": "response",
@@ -113,91 +113,114 @@ Send messages back to LINE users:
   "content": "Here's the image:",
   "artifacts": [
     {
-      "file_name": "image.png",
-      "content_type": "image/png",
       "kind": "image",
-      "data": "base64-data",
-      "local_path": "https://public-url.com/image.png"
+      "content_type": "image/png",
+      "file_name": "photo.png",
+      "local_path": "https://example.com/photo.png"
     }
   ]
 }
 ```
 
-### 8. Message Deduplication
+**Artifact Kinds:** `image`, `audio`, `video`, `file`
 
-Each message includes `webhook_event_id` for deduplication.
+### 8. Auto Loading Indicator
 
-**Use Cases:**
-- Handle webhook redeliveries
-- Prevent duplicate processing
-- Implement idempotent handlers
+When a message is received from a LINE user, the proxy can automatically send a typing indicator to show the user that the bot is processing their request.
 
-### 9. Event Type Support
-
-Beyond messages, the proxy handles:
-
-| Event | Description |
-|-------|-------------|
-| `Follow` | User added bot as friend |
-| `Unfollow` | User blocked bot |
-| `Join` | Bot joined group/room |
-| `Leave` | Bot left group/room |
-| `MemberJoined` | New member joined group |
-| `MemberLeft` | Member left group |
-| `Postback` | Template button tap |
-| `Beacon` | LINE Beacon detection |
-| `AccountLink` | Account link event |
-
-## LINE API Features
-
-The proxy provides access to LINE Messaging API:
-
-### Reply Message
-
-Respond to a webhook event using reply token:
-
-```rust
-line_client.reply_message(reply_token, messages).await?;
+**Configuration:**
+```bash
+LINE_AUTO_LOADING_INDICATOR=true   # default: true
 ```
 
-- Max 5 messages per reply
-- Reply token expires in ~1 minute
+### 9. Auto Mark as Read
 
-### Push Message
+After a response is sent back to a LINE user, the proxy can automatically mark the message as read in the LINE chat.
 
-Send proactive messages:
-
-```rust
-line_client.push_message(to, messages).await?;
+**Configuration:**
+```bash
+LINE_AUTO_MARK_AS_READ=true        # default: true
 ```
 
-- Max 5 messages per push
-- Can send to user/group/room
+### 10. Redelivery Handling
 
-### User Profile
+LINE may redeliver webhook events. The proxy supports deduplication via `webhook_event_id` and configurable redelivery processing.
 
-Get user information:
-
-```rust
-let profile = line_client.get_profile(user_id).await?;
-// profile.display_name, profile.picture_url, profile.status_message
+**Configuration:**
+```bash
+LINE_PROXY_PROCESS_REDELIVERIES=true  # default: true
 ```
 
-### Group Management
+## Data Retention & Persistence
 
-- `get_group_summary(group_id)` - Get group info
-- `get_group_member_ids(group_id)` - List members
-- `get_group_member_profile(group_id, user_id)` - Get member profile
-- `leave_group(group_id)` - Leave a group
+### 11. Message Database
 
-### Bot Info
+All messages (inbound and outbound) can be persisted to a database for audit, analytics, and replay.
 
-Get bot information:
+**Supported Backends:**
+- **SQLite** (default, zero-config): Embedded database, no external dependencies
+- **PostgreSQL** (feature flag `postgres`): For production deployments with existing PG infrastructure
 
-```rust
-let info = line_client.get_bot_info().await?;
-// info.user_id, info.display_name, info.picture_url
+**Configuration:**
+```bash
+LINE_PROXY_DB_TYPE=sqlite          # or "postgres"
+LINE_PROXY_DB_URL=postgresql://... # required for postgres
 ```
+
+### 12. Contact & Group Storage
+
+Store and retrieve LINE contact profiles and group information:
+- User display names, profile pictures
+- Group summaries and member lists
+- Updated automatically on message receipt
+
+### 13. Data Retention Policies
+
+Configure automatic cleanup of old data:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LINE_PROXY_RETENTION_ENABLED` | `false` | Enable data retention cleanup |
+| `LINE_PROXY_RETENTION_MAX_AGE_DAYS` | `90` | Max message age in days |
+| `LINE_PROXY_RETENTION_CLEANUP_INTERVAL_SECS` | `3600` | Cleanup check interval |
+
+## Message Retry
+
+### 14. Inbound Message Retry
+
+If a UGENT client is not connected when a LINE message arrives, the message is stored in an inbound queue. When a client reconnects, pending messages are automatically delivered.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LINE_PROXY_RETRY_ENABLED` | `false` | Enable retry system |
+| `LINE_PROXY_RETRY_MAX_ATTEMPTS` | `5` | Max retry attempts |
+| `LINE_PROXY_RETRY_INITIAL_DELAY_SECS` | `1` | Initial backoff delay |
+| `LINE_PROXY_RETRY_MAX_DELAY_SECS` | `300` | Maximum backoff delay |
+
+### 15. Outbound Message Retry
+
+If sending a response to LINE fails (network error, rate limit, etc.), the message is queued for retry with exponential backoff.
+
+**Features:**
+- Exponential backoff with configurable limits
+- Automatic retry on transient failures
+- Dead letter handling after max retries exceeded
+
+## Relationship Management (RMS)
+
+### 16. Entity-Client Mapping
+
+The Relationship Management System (RMS) allows controlling which UGENT client handles which LINE conversation.
+
+**Features:**
+- View connected clients and their status
+- Map LINE entities (users/groups) to specific clients
+- Import/export relationship configurations
+- REST API and CLI for management
+
+See [RMS CLI & API Guide](./RMS_CLI_API_GUIDE.md) for details.
 
 ## Integration Features
 
@@ -272,6 +295,17 @@ The proxy supports multiple UGENT clients:
 4. User receives response in group
 ```
 
+### Example 4: Message Retry Flow
+
+```
+1. LINE message arrives
+2. No UGENT client connected
+3. Message stored in inbound queue
+4. UGENT client connects
+5. Pending messages delivered from queue
+6. Message processed normally
+```
+
 ## Limitations
 
 1. **Media URLs**: LINE requires public URLs for images/videos. The proxy cannot send local files directly.
@@ -286,3 +320,5 @@ The proxy supports multiple UGENT clients:
 3. **Check @Mentions**: In groups, only respond when bot is mentioned
 4. **Provide Public URLs**: For images/videos, upload to public URL first
 5. **Implement Fallbacks**: Handle expired reply tokens by falling back to push messages
+6. **Enable Retry**: Set `LINE_PROXY_RETRY_ENABLED=true` for production reliability
+7. **Enable Storage**: Set `LINE_PROXY_STORAGE_ENABLED=true` for persistence and RMS support

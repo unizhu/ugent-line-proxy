@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Rust 1.70 or later
+- Rust 1.93 or later (edition 2024)
 - LINE Developers account
 - LINE Messaging API channel
 - Public server (VPS) for webhook reception
@@ -49,9 +49,21 @@ LINE_CHANNEL_ACCESS_TOKEN=your_access_token
 # WebSocket Auth
 LINE_PROXY_API_KEY=your_secure_api_key
 
-# Optional
+# Optional: Logging
 LINE_PROXY_LOG_LEVEL=info
 LINE_PROXY_LOG_FORMAT=json
+
+# Optional: Storage (enables RMS)
+LINE_PROXY_STORAGE_ENABLED=true
+LINE_PROXY_STORAGE_PATH=~/.ugent/line-plugin/
+
+# Optional: Database (message persistence & retry)
+LINE_PROXY_DB_TYPE=sqlite
+
+# Optional: Auto features
+LINE_AUTO_LOADING_INDICATOR=true
+LINE_AUTO_MARK_AS_READ=true
+LINE_PROXY_PROCESS_REDELIVERIES=true
 ```
 
 ### 5. Run the Proxy
@@ -205,12 +217,17 @@ sudo systemctl status ugent-line-proxy
 # Build
 docker build -t ugent-line-proxy .
 
-# Run
+# Run with all features
 docker run -d \
   -p 3000:3000 \
   -e LINE_CHANNEL_SECRET=your_secret \
   -e LINE_CHANNEL_ACCESS_TOKEN=your_token \
   -e LINE_PROXY_API_KEY=your_key \
+  -e LINE_PROXY_STORAGE_ENABLED=true \
+  -e LINE_PROXY_DB_TYPE=sqlite \
+  -e LINE_AUTO_LOADING_INDICATOR=true \
+  -e LINE_AUTO_MARK_AS_READ=true \
+  -v ugent-line-data:/data \
   ugent-line-proxy
 ```
 
@@ -283,3 +300,5 @@ Ensure your UGENT client is connected and authenticated.
 - See [WebSocket Protocol](./WEBSOCKET_PROTOCOL.md) for message formats
 - Check [Features](./FEATURES.md) for available capabilities
 - Reference [API Documentation](./API_REFERENCE.md) for details
+- See [RMS Guide](./RMS_CLI_API_GUIDE.md) for relationship management
+- Check [Database & Retry](./DATABASE_RETRY.md) for persistence and retry features

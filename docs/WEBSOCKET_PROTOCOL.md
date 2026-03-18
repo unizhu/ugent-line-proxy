@@ -113,8 +113,11 @@ Delivers an incoming LINE message to the UGENT client.
     "timestamp": 1692251666727,
     "reply_token": "38ef843bde154d9b91c21320ffd17a0f",
     "quote_token": null,
+    "mark_as_read_token": null,
     "webhook_event_id": "01H810YECXQQZ37VAXPF6H9E6T",
-    "source_type": "user"
+    "source_type": "user",
+    "sender_name": "John Doe",
+    "sender_picture_url": null
   }
 }
 ```
@@ -216,8 +219,11 @@ The main message envelope for LINE communication.
 | `timestamp` | number | Unix milliseconds |
 | `reply_token` | string | LINE reply token (valid ~1 minute) |
 | `quote_token` | string | Quote/reply token |
+| `mark_as_read_token` | string | Mark-as-read token (LINE-specific) |
 | `webhook_event_id` | string | Unique webhook event ID |
 | `source_type` | string | `user`, `group`, or `room` |
+| `sender_name` | string | Sender display name (optional) |
+| `sender_picture_url` | string | Sender profile picture URL (optional) |
 
 ### LineMessageContent Types
 
