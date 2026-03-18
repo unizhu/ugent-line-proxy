@@ -155,6 +155,12 @@ pub struct LineConfig {
     /// Process redelivered events
     #[serde(default = "default_true")]
     pub process_redeliveries: bool,
+    /// Automatically send typing indicator when messages are received
+    #[serde(default = "default_true")]
+    pub auto_loading_indicator: bool,
+    /// Automatically mark messages as read after response
+    #[serde(default = "default_true")]
+    pub auto_mark_as_read: bool,
 }
 
 fn default_webhook_path() -> String {
@@ -192,12 +198,22 @@ impl LineConfig {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
+        let auto_loading_indicator = std::env::var("LINE_AUTO_LOADING_INDICATOR")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+
+        let auto_mark_as_read = std::env::var("LINE_AUTO_MARK_AS_READ")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+
         Ok(Self {
             channel_secret,
             channel_access_token,
             webhook_path,
             skip_signature,
             process_redeliveries,
+            auto_loading_indicator,
+            auto_mark_as_read,
         })
     }
 }

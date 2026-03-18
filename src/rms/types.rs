@@ -243,15 +243,28 @@ mod tests {
 
     #[test]
     fn test_entity_type_from_line_id() {
-        assert_eq!(LineEntityType::from_line_id("U123456"), LineEntityType::User);
-        assert_eq!(LineEntityType::from_line_id("C123456"), LineEntityType::Group);
-        assert_eq!(LineEntityType::from_line_id("R123456"), LineEntityType::Room);
+        assert_eq!(
+            LineEntityType::from_line_id("U123456"),
+            LineEntityType::User
+        );
+        assert_eq!(
+            LineEntityType::from_line_id("C123456"),
+            LineEntityType::Group
+        );
+        assert_eq!(
+            LineEntityType::from_line_id("R123456"),
+            LineEntityType::Room
+        );
     }
 
     #[test]
     fn test_entity_type_str_roundtrip() {
-        for et in &[LineEntityType::User, LineEntityType::Group, LineEntityType::Room] {
-            assert_eq!(LineEntityType::from_str(et.as_str()), Some(*et));
+        for et in &[
+            LineEntityType::User,
+            LineEntityType::Group,
+            LineEntityType::Room,
+        ] {
+            assert_eq!(LineEntityType::parse_entity_type(et.as_str()), Some(*et));
         }
     }
 

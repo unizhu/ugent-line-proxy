@@ -5,12 +5,8 @@
 use std::sync::Arc;
 
 use ugent_line_proxy::{
-    config::Config,
-    line_api::LineApiClient,
-    rms::Cli,
-    storage::Storage,
-    ws_manager::WebSocketManager,
-    RelationshipManagerService,
+    RelationshipManagerService, config::Config, line_api::LineApiClient, rms::Cli,
+    storage::Storage, ws_manager::WebSocketManager,
 };
 
 use clap::Parser;

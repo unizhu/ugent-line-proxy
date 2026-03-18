@@ -200,9 +200,8 @@ impl RmsStorage {
     /// Count entities
     pub fn count_entities(&self) -> Result<usize, StorageError> {
         let conn = self.conn.lock();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM line_entities", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM line_entities", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -299,9 +298,8 @@ impl RmsStorage {
 
         // Fetch the inserted/updated relationship
         drop(conn);
-        self.get_relationship(entity_id)?.ok_or_else(|| {
-            StorageError::Connection(rusqlite::Error::QueryReturnedNoRows)
-        })
+        self.get_relationship(entity_id)?
+            .ok_or_else(|| StorageError::Connection(rusqlite::Error::QueryReturnedNoRows))
     }
 
     /// Remove a relationship
@@ -317,9 +315,8 @@ impl RmsStorage {
     /// Count relationships
     pub fn count_relationships(&self) -> Result<usize, StorageError> {
         let conn = self.conn.lock();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM relationships", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM relationships", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -335,7 +332,10 @@ impl RmsStorage {
     }
 
     /// Get relationships by client
-    pub fn get_relationships_by_client(&self, client_id: &str) -> Result<Vec<Relationship>, StorageError> {
+    pub fn get_relationships_by_client(
+        &self,
+        client_id: &str,
+    ) -> Result<Vec<Relationship>, StorageError> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(
             "SELECT id, line_entity_id, entity_type, client_id, priority, is_manual, created_at, updated_at, notes 
@@ -394,11 +394,13 @@ impl RmsStorage {
     }
 
     /// Get last dispatch time for a conversation
-    pub fn get_last_dispatch_time(&self, conversation_id: &str) -> Result<Option<i64>, StorageError> {
+    pub fn get_last_dispatch_time(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<i64>, StorageError> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT MAX(dispatched_at) FROM dispatch_history WHERE conversation_id = ?"
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT MAX(dispatched_at) FROM dispatch_history WHERE conversation_id = ?")?;
         let mut rows = stmt.query([conversation_id])?;
         if let Some(row) = rows.next()? {
             let val: Option<i64> = row.get(0)?;
@@ -429,7 +431,6 @@ impl RmsStorage {
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use tempfile::tempdir;
 
     fn create_test_storage() -> RmsStorage {
         let conn = Connection::open_in_memory().unwrap();

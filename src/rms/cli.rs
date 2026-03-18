@@ -3,7 +3,7 @@
 //! Command-line interface for the Relationship Management System.
 
 use clap::{Parser, Subcommand};
-use comfy_table::{presets::UTF8_FULL, Cell, Color, Table};
+use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use std::io::{self, Read};
 
 use super::service::RelationshipManagerService;
@@ -123,11 +123,17 @@ pub async fn run(rms: RelationshipManagerService) -> Result<(), Box<dyn std::err
 }
 
 /// Run the CLI with pre-parsed arguments (for binary use)
-pub async fn run_with_cli(cli: Cli, rms: RelationshipManagerService) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_with_cli(
+    cli: Cli,
+    rms: RelationshipManagerService,
+) -> Result<(), Box<dyn std::error::Error>> {
     execute(cli, rms).await
 }
 
-async fn execute(cli: Cli, rms: RelationshipManagerService) -> Result<(), Box<dyn std::error::Error>> {
+async fn execute(
+    cli: Cli,
+    rms: RelationshipManagerService,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
             let status = rms.get_status().await?;
@@ -139,12 +145,10 @@ async fn execute(cli: Cli, rms: RelationshipManagerService) -> Result<(), Box<dy
                 let clients = rms.get_clients().await?;
                 print_clients(&clients);
             }
-            ClientCommands::Show { id } => {
-                match rms.get_client(&id).await? {
-                    Some(client) => print_client_detail(&client),
-                    None => println!("Client not found: {}", id),
-                }
-            }
+            ClientCommands::Show { id } => match rms.get_client(&id).await? {
+                Some(client) => print_client_detail(&client),
+                None => println!("Client not found: {}", id),
+            },
         },
 
         Commands::Entities { cmd } => match cmd {
@@ -163,7 +167,9 @@ async fn execute(cli: Cli, rms: RelationshipManagerService) -> Result<(), Box<dy
                 };
 
                 let filter = EntityFilter {
-                    entity_type: r#type.as_ref().and_then(|s| LineEntityType::parse_entity_type(s)),
+                    entity_type: r#type
+                        .as_ref()
+                        .and_then(|s| LineEntityType::parse_entity_type(s)),
                     has_relationship,
                     search,
                     limit: Some(100),
@@ -183,15 +189,13 @@ async fn execute(cli: Cli, rms: RelationshipManagerService) -> Result<(), Box<dy
                 Some(entity) => print_entity_detail(&entity),
                 None => println!("Entity not found: {}", id),
             },
-            EntityCommands::Refresh { id } => {
-                match rms.refresh_entity(&id).await? {
-                    Some(entity) => {
-                        println!("Entity refreshed:");
-                        print_entity_detail(&entity);
-                    }
-                    None => println!("Failed to refresh entity: {}", id),
+            EntityCommands::Refresh { id } => match rms.refresh_entity(&id).await? {
+                Some(entity) => {
+                    println!("Entity refreshed:");
+                    print_entity_detail(&entity);
                 }
-            }
+                None => println!("Failed to refresh entity: {}", id),
+            },
         },
 
         Commands::Relationships { cmd } => match cmd {
@@ -287,9 +291,18 @@ fn print_status(status: &SystemStatus) {
     println!("├─────────────────────────────────────────────────────┤");
     println!("│ Connected Clients:     {:<27}│", status.connected_clients);
     println!("│ Total Entities:        {:<27}│", status.total_entities);
-    println!("│ Total Relationships:   {:<27}│", status.total_relationships);
-    println!("│   ├─ Manual:           {:<27}│", status.manual_relationships);
-    println!("│   └─ Auto-detected:    {:<27}│", status.auto_relationships);
+    println!(
+        "│ Total Relationships:   {:<27}│",
+        status.total_relationships
+    );
+    println!(
+        "│   ├─ Manual:           {:<27}│",
+        status.manual_relationships
+    );
+    println!(
+        "│   └─ Auto-detected:    {:<27}│",
+        status.auto_relationships
+    );
     println!("│ Pending Messages:      {:<27}│", status.pending_messages);
 
     let uptime = format_uptime(status.uptime_secs);
@@ -339,7 +352,10 @@ fn print_clients(clients: &[ClientInfo]) {
 fn print_client_detail(client: &ClientInfo) {
     println!();
     println!("Client: {}", client.client_id);
-    println!("  Connected: {}", if client.connected { "Yes" } else { "No" });
+    println!(
+        "  Connected: {}",
+        if client.connected { "Yes" } else { "No" }
+    );
     println!(
         "  Connected At: {}",
         client
@@ -347,17 +363,32 @@ fn print_client_detail(client: &ClientInfo) {
             .map(format_timestamp)
             .unwrap_or_else(|| "N/A".to_string())
     );
-    println!("  Last Activity: {}", format_timestamp(client.last_activity));
+    println!(
+        "  Last Activity: {}",
+        format_timestamp(client.last_activity)
+    );
     println!("  Owned Conversations: {}", client.owned_conversations);
     if let Some(metadata) = &client.metadata {
-        println!("  Metadata: {}", serde_json::to_string(metadata).unwrap_or_default());
+        println!(
+            "  Metadata: {}",
+            serde_json::to_string(metadata).unwrap_or_default()
+        );
     }
 }
 
-fn print_entities(entities: &[LineEntity], rel_map: &std::collections::HashMap<&str, &Relationship>) {
+fn print_entities(
+    entities: &[LineEntity],
+    rel_map: &std::collections::HashMap<&str, &Relationship>,
+) {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Entity ID", "Type", "Display Name", "Assigned Client", "Manual?"]);
+    table.set_header(vec![
+        "Entity ID",
+        "Type",
+        "Display Name",
+        "Assigned Client",
+        "Manual?",
+    ]);
 
     for entity in entities {
         let (assigned_client, is_manual) = match rel_map.get(entity.id.as_str()) {
@@ -423,7 +454,10 @@ fn print_relationship_detail(rel: &Relationship) {
     println!("Relationship #{}", rel.id);
     println!("  Entity:     {} ({})", rel.line_entity_id, rel.entity_type);
     println!("  Client:     {}", rel.client_id);
-    println!("  Type:       {}", if rel.is_manual { "Manual" } else { "Auto" });
+    println!(
+        "  Type:       {}",
+        if rel.is_manual { "Manual" } else { "Auto" }
+    );
     println!("  Created:    {}", format_timestamp(rel.created_at));
     println!("  Updated:    {}", format_timestamp(rel.updated_at));
     if let Some(notes) = &rel.notes {
@@ -434,7 +468,13 @@ fn print_relationship_detail(rel: &Relationship) {
 fn print_dispatch_rules(rules: &[DispatchRule]) {
     let mut table = Table::new();
     table.load_preset(UTF8_FULL);
-    table.set_header(vec!["Conversation", "Assigned Client", "Connected", "Type", "Messages"]);
+    table.set_header(vec![
+        "Conversation",
+        "Assigned Client",
+        "Connected",
+        "Type",
+        "Messages",
+    ]);
 
     for rule in rules {
         let (client, connected) = match &rule.assigned_client {
@@ -469,9 +509,7 @@ fn print_dispatch_rule_detail(rule: &DispatchRule) {
     println!("  Type: {}", rule.entity_type);
     println!(
         "  Assigned Client: {}",
-        rule.assigned_client
-            .as_deref()
-            .unwrap_or("(broadcast)")
+        rule.assigned_client.as_deref().unwrap_or("(broadcast)")
     );
     println!(
         "  Client Connected: {}",
@@ -481,7 +519,10 @@ fn print_dispatch_rule_detail(rule: &DispatchRule) {
             "No"
         }
     );
-    println!("  Route Type: {}", if rule.is_manual { "Manual" } else { "Auto" });
+    println!(
+        "  Route Type: {}",
+        if rule.is_manual { "Manual" } else { "Auto" }
+    );
     println!(
         "  Last Routed: {}",
         rule.last_routed_at

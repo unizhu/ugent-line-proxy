@@ -7,7 +7,7 @@
 //! - Getting user profiles
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use thiserror::Error;
 use tracing::{debug, error, info, warn};
 
@@ -80,7 +80,8 @@ impl LineApiClient {
         reply_token: &str,
         messages: Vec<Value>,
     ) -> Result<(), LineApiError> {
-        self.reply_message_with_retry_key(reply_token, messages, None).await
+        self.reply_message_with_retry_key(reply_token, messages, None)
+            .await
     }
 
     /// Reply to a webhook event with optional retry key for idempotency
@@ -393,6 +394,46 @@ impl LineApiClient {
         }
     }
 
+    /// Mark messages as read using the mark-as-read token.
+    ///
+    /// This marks all messages prior to the one with the given token as read.
+    /// Read tokens have no expiration date.
+    ///
+    /// API endpoint: POST /v2/bot/chat/markAsRead
+    pub async fn mark_as_read(&self, mark_as_read_token: &str) -> Result<(), LineApiError> {
+        let url = format!("{}/chat/markAsRead", API_BASE);
+        let body = json!({
+            "markAsReadToken": mark_as_read_token
+        });
+
+        debug!(
+            "Marking messages as read with token: {}...",
+            &mark_as_read_token[..8.min(mark_as_read_token.len())]
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            info!("Messages marked as read");
+            Ok(())
+        } else {
+            let error_text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            error!("Failed to mark as read: {} - {}", status, error_text);
+            Err(LineApiError::ApiError(status.as_u16(), error_text))
+        }
+    }
+
     /// Get group summary
     pub async fn get_group_summary(&self, group_id: &str) -> Result<GroupSummary, LineApiError> {
         let url = format!("{}/group/{}/summary", API_BASE, group_id);
@@ -607,19 +648,19 @@ pub fn artifact_to_message(artifact: &OutboundArtifact) -> Option<Value> {
         }
         ArtifactKind::Audio => {
             // Similar limitation for audio
-            if let Some(url) = &artifact.local_path {
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    // Duration is unknown, estimate from base64 size
-                    return Some(build_audio_message(url, 60000));
-                }
+            if let Some(url) = &artifact.local_path
+                && (url.starts_with("http://") || url.starts_with("https://"))
+            {
+                // Duration is unknown, estimate from base64 size
+                return Some(build_audio_message(url, 60000));
             }
             None
         }
         ArtifactKind::Video => {
-            if let Some(url) = &artifact.local_path {
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some(build_video_message(url, url));
-                }
+            if let Some(url) = &artifact.local_path
+                && (url.starts_with("http://") || url.starts_with("https://"))
+            {
+                return Some(build_video_message(url, url));
             }
             None
         }

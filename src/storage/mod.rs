@@ -77,12 +77,11 @@ impl Storage {
 
     /// Create or open storage at a specific path
     pub fn with_path(db_path: &PathBuf) -> Result<Self, StorageError> {
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| StorageError::DirectoryCreate(e.to_string()))?;
-            }
+        if let Some(parent) = db_path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| StorageError::DirectoryCreate(e.to_string()))?;
         }
 
         // Open or create database

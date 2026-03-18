@@ -7,9 +7,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    http::{header, Method},
-    routing::{get, post},
     Router,
+    http::{Method, header},
+    routing::{get, post},
 };
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, warn};
@@ -19,7 +19,7 @@ use ugent_line_proxy::{
     broker::MessageBroker,
     config::Config,
     handle_webhook,
-    rms::{rms_routes, RelationshipManagerService},
+    rms::{RelationshipManagerService, rms_routes},
     storage::Storage,
     ws_manager::WebSocketManager,
 };
@@ -74,7 +74,10 @@ async fn main() -> anyhow::Result<()> {
                 (ws_manager, Some(storage_arc))
             }
             Err(e) => {
-                warn!("Failed to initialize storage: {}. Falling back to in-memory mode.", e);
+                warn!(
+                    "Failed to initialize storage: {}. Falling back to in-memory mode.",
+                    e
+                );
                 (Arc::new(WebSocketManager::new(config.clone())), None)
             }
         }
@@ -85,9 +88,8 @@ async fn main() -> anyhow::Result<()> {
     let broker = Arc::new(MessageBroker::new(config.clone(), ws_manager.clone()));
 
     // Create RMS service for relationship management (optional if storage available)
-    let line_client = ugent_line_proxy::line_api::LineApiClient::new(
-        config.line.channel_access_token.clone(),
-    );
+    let line_client =
+        ugent_line_proxy::line_api::LineApiClient::new(config.line.channel_access_token.clone());
 
     // Build main router
     let mut app = Router::new()

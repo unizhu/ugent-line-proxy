@@ -12,14 +12,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use reqwest::Client;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
-use crate::line_api::{self, artifact_to_message, build_text_message, LineApiClient};
+use crate::line_api::{self, LineApiClient, artifact_to_message, build_text_message};
 use crate::storage::{
-    Storage, METRIC_MESSAGES_RECEIVED, METRIC_MESSAGES_SENT, METRIC_PENDING_MESSAGES,
-    METRIC_RESPONSES_RECEIVED,
+    METRIC_MESSAGES_RECEIVED, METRIC_MESSAGES_SENT, METRIC_PENDING_MESSAGES,
+    METRIC_RESPONSES_RECEIVED, Storage,
 };
 use crate::types::{Capabilities, OutboundArtifact, PendingMessage, ProxyMessage, WsProtocol};
 use crate::ws_manager::{SendError, WebSocketManager};
@@ -39,10 +38,6 @@ pub struct MessageBroker {
     ws_manager: Arc<WebSocketManager>,
     /// LINE API client
     line_client: LineApiClient,
-    /// HTTP client for artifact downloads
-    /// TODO: Use this for downloading media artifacts from LINE
-    #[allow(dead_code)]
-    http_client: Client,
     /// Pending messages awaiting response (original_id -> PendingMessage)
     pending_messages: RwLock<HashMap<String, PendingMessage>>,
     /// Persistent storage (optional)
@@ -54,16 +49,10 @@ impl MessageBroker {
     pub fn new(config: Arc<Config>, ws_manager: Arc<WebSocketManager>) -> Self {
         let line_client = LineApiClient::new(config.line.channel_access_token.clone());
 
-        let http_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
             config,
             ws_manager,
             line_client,
-            http_client,
             pending_messages: RwLock::new(HashMap::new()),
             storage: None,
         }
@@ -77,16 +66,10 @@ impl MessageBroker {
     ) -> Self {
         let line_client = LineApiClient::new(config.line.channel_access_token.clone());
 
-        let http_client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client");
-
         Self {
             config,
             ws_manager,
             line_client,
-            http_client,
             pending_messages: RwLock::new(HashMap::new()),
             storage: Some(Arc::new(storage)),
         }
@@ -113,6 +96,13 @@ impl MessageBroker {
     pub async fn send_to_clients(&self, message: ProxyMessage) -> Result<(), BrokerError> {
         let original_id = message.id.clone();
         let conversation_id = message.conversation_id.clone();
+
+        // Start typing indicator if enabled (non-fatal if it fails)
+        if self.config.line.auto_loading_indicator
+            && let Err(e) = self.line_client.start_loading(&conversation_id).await
+        {
+            warn!("Failed to start loading indicator: {}", e);
+        }
 
         // Create pending message for tracking
         let mut pending = PendingMessage::from_proxy_message(&message);
@@ -215,6 +205,7 @@ impl MessageBroker {
         original_id: String,
         content: String,
         artifacts: Vec<OutboundArtifact>,
+        responding_client_id: Option<String>,
     ) -> Result<(), BrokerError> {
         info!(
             "Handling response: original_id={}, request_id={:?}, content_len={}, artifacts={}",
@@ -241,6 +232,7 @@ impl MessageBroker {
                         original_id.clone(),
                         false,
                         Some("No pending message found".to_string()),
+                        responding_client_id.as_deref(),
                     )
                     .await?;
                 }
@@ -274,19 +266,34 @@ impl MessageBroker {
         // Try to send messages
         let send_result = self.send_line_messages(&pending, messages).await;
 
+        // Auto mark-as-read if enabled and send succeeded (non-fatal)
+        if send_result.is_ok()
+            && self.config.line.auto_mark_as_read
+            && let Some(ref token) = pending.mark_as_read_token
+            && let Err(e) = self.line_client.mark_as_read(token).await
+        {
+            warn!("Failed to mark as read: {}", e);
+        }
+
         // Record response received metric if storage enabled
-        if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.metrics().increment(METRIC_RESPONSES_RECEIVED) {
-                warn!("Failed to record response received metric: {}", e);
-            }
+        if let Some(ref storage) = self.storage
+            && let Err(e) = storage.metrics().increment(METRIC_RESPONSES_RECEIVED)
+        {
+            warn!("Failed to record response received metric: {}", e);
         }
 
         // Send ResponseResult to client
         if let Some(ref req_id) = request_id {
             match &send_result {
                 Ok(()) => {
-                    self.send_response_result(Some(req_id.clone()), original_id, true, None)
-                        .await?;
+                    self.send_response_result(
+                        Some(req_id.clone()),
+                        original_id,
+                        true,
+                        None,
+                        responding_client_id.as_deref(),
+                    )
+                    .await?;
                 }
                 Err(e) => {
                     self.send_response_result(
@@ -294,6 +301,7 @@ impl MessageBroker {
                         original_id,
                         false,
                         Some(e.to_string()),
+                        responding_client_id.as_deref(),
                     )
                     .await?;
                 }
@@ -315,26 +323,26 @@ impl MessageBroker {
         }
 
         // Try reply token first if valid
-        if pending.is_reply_token_valid() {
-            if let Some(ref token) = pending.reply_token {
-                // LINE limits to 5 messages per reply
-                for chunk in messages.chunks(5) {
-                    match self.line_client.reply_message(token, chunk.to_vec()).await {
-                        Ok(()) => {
-                            info!("Sent {} message(s) via reply token", chunk.len());
-                        }
-                        Err(line_api::LineApiError::InvalidReplyToken) => {
-                            warn!("Reply token expired during batch, falling back to push");
-                            return self.send_via_push(&pending.conversation_id, messages).await;
-                        }
-                        Err(e) => {
-                            error!("LINE API error: {}", e);
-                            return Err(BrokerError::LineApi(e.to_string()));
-                        }
+        if pending.is_reply_token_valid()
+            && let Some(ref token) = pending.reply_token
+        {
+            // LINE limits to 5 messages per reply
+            for chunk in messages.chunks(5) {
+                match self.line_client.reply_message(token, chunk.to_vec()).await {
+                    Ok(()) => {
+                        info!("Sent {} message(s) via reply token", chunk.len());
+                    }
+                    Err(line_api::LineApiError::InvalidReplyToken) => {
+                        warn!("Reply token expired during batch, falling back to push");
+                        return self.send_via_push(&pending.conversation_id, messages).await;
+                    }
+                    Err(e) => {
+                        error!("LINE API error: {}", e);
+                        return Err(BrokerError::LineApi(e.to_string()));
                     }
                 }
-                return Ok(());
             }
+            return Ok(());
         }
 
         // Fall back to push message
@@ -368,22 +376,23 @@ impl MessageBroker {
         }
 
         // Record metrics if storage enabled
-        if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.metrics().increment(METRIC_MESSAGES_SENT) {
-                warn!("Failed to record message sent metric: {}", e);
-            }
+        if let Some(ref storage) = self.storage
+            && let Err(e) = storage.metrics().increment(METRIC_MESSAGES_SENT)
+        {
+            warn!("Failed to record message sent metric: {}", e);
         }
 
         Ok(())
     }
 
-    /// Send ResponseResult to client
+    /// Send ResponseResult to a specific client
     async fn send_response_result(
         &self,
         request_id: Option<String>,
         original_id: String,
         success: bool,
         error: Option<String>,
+        target_client_id: Option<&str>,
     ) -> Result<(), BrokerError> {
         let result = WsProtocol::ResponseResult {
             request_id,
@@ -392,9 +401,27 @@ impl MessageBroker {
             error,
         };
 
-        // Broadcast to all clients (or could target specific client with targeted routing)
-        self.ws_manager.broadcast(result).await?;
-        Ok(())
+        if let Some(client_id) = target_client_id {
+            match self.ws_manager.send_to(client_id, result).await {
+                Ok(()) => {
+                    debug!("ResponseResult sent to client {}", client_id);
+                    Ok(())
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to send ResponseResult to client {}: {}",
+                        client_id, e
+                    );
+                    Ok(())
+                }
+            }
+        } else {
+            self.ws_manager
+                .broadcast(result)
+                .await
+                .map_err(BrokerError::Broadcast)?;
+            Ok(())
+        }
     }
 
     /// Send artifact to LINE user

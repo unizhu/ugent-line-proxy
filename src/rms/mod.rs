@@ -13,10 +13,10 @@ pub mod storage;
 pub mod types;
 
 pub use api::rms_routes;
-pub use cli::{run_with_cli, Cli};
+pub use cli::{Cli, run_with_cli};
 pub use service::RelationshipManagerService;
 pub use storage::RmsStorage;
 pub use types::{
-    ClientInfo, DispatchRule, EntityFilter, ImportResult, LineEntity, LineEntityType,
-    Relationship, RelationshipImport, RmsError, SyncResult, SystemStatus,
+    ClientInfo, DispatchRule, EntityFilter, ImportResult, LineEntity, LineEntityType, Relationship,
+    RelationshipImport, RmsError, SyncResult, SystemStatus,
 };

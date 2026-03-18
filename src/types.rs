@@ -92,6 +92,9 @@ pub struct ProxyMessage {
     pub reply_token: Option<String>,
     /// Quote token (LINE-specific: for quote/reply messages)
     pub quote_token: Option<String>,
+    /// Mark-as-read token (LINE-specific: for marking messages as read)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_as_read_token: Option<String>,
     /// Webhook event ID (for deduplication) - always present
     pub webhook_event_id: String,
     /// Source type (user/group/room)
@@ -118,6 +121,7 @@ impl ProxyMessage {
             timestamp: event.timestamp,
             reply_token: event.reply_token.clone(),
             quote_token: event.message.quote_token(),
+            mark_as_read_token: event.message.mark_as_read_token(),
             webhook_event_id: event.webhook_event_id.clone(),
             source_type: source.source_type(),
         }
@@ -333,7 +337,21 @@ impl LineMessage {
             LineMessage::Text(m) => m.quote_token.clone(),
             LineMessage::Image(m) => m.quote_token.clone(),
             LineMessage::Video(m) => m.quote_token.clone(),
+            LineMessage::Sticker(m) => m.quote_token.clone(),
             _ => None,
+        }
+    }
+
+    /// Get mark-as-read token if available
+    pub fn mark_as_read_token(&self) -> Option<String> {
+        match self {
+            LineMessage::Text(m) => m.mark_as_read_token.clone(),
+            LineMessage::Image(m) => m.mark_as_read_token.clone(),
+            LineMessage::Audio(m) => m.mark_as_read_token.clone(),
+            LineMessage::Video(m) => m.mark_as_read_token.clone(),
+            LineMessage::File(m) => m.mark_as_read_token.clone(),
+            LineMessage::Sticker(m) => m.mark_as_read_token.clone(),
+            LineMessage::Location(_m) => None,
         }
     }
 }
@@ -351,6 +369,9 @@ pub struct TextMessage {
     /// Quote token (for quote messages)
     #[serde(default, rename = "quoteToken")]
     pub quote_token: Option<String>,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// Mention object
@@ -373,6 +394,9 @@ pub struct Mentionee {
     /// Whether this mention is the bot itself
     #[serde(default, rename = "isSelf")]
     pub is_self: bool,
+    /// Type of mentionee ("user" or "all")
+    #[serde(default, rename = "mentioneeType")]
+    pub mentionee_type: Option<String>,
 }
 
 /// Image message
@@ -385,6 +409,9 @@ pub struct ImageMessage {
     /// Quote token
     #[serde(default, rename = "quoteToken")]
     pub quote_token: Option<String>,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// Audio message
@@ -396,6 +423,9 @@ pub struct AudioMessage {
     pub duration: i64,
     /// Content provider
     pub content_provider: ContentProvider,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// Video message
@@ -410,6 +440,9 @@ pub struct VideoMessage {
     /// Quote token
     #[serde(default, rename = "quoteToken")]
     pub quote_token: Option<String>,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// File message
@@ -421,6 +454,9 @@ pub struct FileMessage {
     pub file_name: String,
     /// File size in bytes
     pub file_size: i64,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// Sticker message
@@ -438,6 +474,12 @@ pub struct StickerMessage {
     /// Keywords for the sticker
     #[serde(default)]
     pub keywords: Vec<String>,
+    /// Quote token (for quote messages in groups)
+    #[serde(default, rename = "quoteToken")]
+    pub quote_token: Option<String>,
+    /// Read token for mark-as-read API
+    #[serde(default, rename = "markAsReadToken")]
+    pub mark_as_read_token: Option<String>,
 }
 
 /// Location message
@@ -585,6 +627,35 @@ pub struct FollowEvent {
     /// Reply token
     #[serde(rename = "replyToken")]
     pub reply_token: String,
+    /// Follow details
+    #[serde(default, deserialize_with = "deserialize_follow_detail")]
+    pub follow: FollowDetail,
+}
+
+/// Follow event detail containing isUnblocked flag
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FollowDetail {
+    /// Whether the user unblocked the bot (true if re-adding after block)
+    #[serde(default)]
+    pub is_unblocked: bool,
+}
+
+/// Deserialize FollowDetail from either an object or missing/null value
+fn deserialize_follow_detail<'de, D>(deserializer: D) -> Result<FollowDetail, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let val = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match val {
+        Some(serde_json::Value::Object(map)) => {
+            let is_unblocked = map
+                .get("isUnblocked")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Ok(FollowDetail { is_unblocked })
+        }
+        _ => Ok(FollowDetail::default()),
+    }
 }
 
 /// Unfollow event
@@ -1083,6 +1154,8 @@ pub struct PendingMessage {
     pub webhook_event_id: String,
     /// Client that should receive the response (for targeted routing)
     pub client_id: Option<String>,
+    /// Mark-as-read token (for auto mark-as-read)
+    pub mark_as_read_token: Option<String>,
 }
 
 impl PendingMessage {
@@ -1102,6 +1175,7 @@ impl PendingMessage {
             reply_token_expires_at,
             webhook_event_id: msg.webhook_event_id.clone(),
             client_id: None, // Will be set when targeted routing is implemented
+            mark_as_read_token: msg.mark_as_read_token.clone(),
         }
     }
 

@@ -7,16 +7,16 @@ use std::{
     collections::{HashMap, HashSet},
     net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use axum::{
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         ConnectInfo, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
@@ -28,7 +28,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::broker::MessageBroker;
 use crate::config::Config;
-use crate::storage::{MetricsStore, Storage, METRIC_OWNERSHIP_CLAIMS, METRIC_OWNERSHIP_RELEASES};
+use crate::storage::{METRIC_OWNERSHIP_CLAIMS, METRIC_OWNERSHIP_RELEASES, MetricsStore, Storage};
 use crate::types::{AuthData, ClientInfo, WsProtocol};
 
 /// WebSocket manager
@@ -207,15 +207,15 @@ impl WebSocketManager {
     pub fn claim_conversation(&self, conversation_id: &str, client_id: &str) -> bool {
         let mut owners = self.conversation_owners.write();
 
-        if let Some(existing_owner) = owners.get(conversation_id) {
-            if existing_owner != client_id {
-                // Already owned by another client
-                debug!(
-                    "Conversation {} already owned by {}, cannot claim for {}",
-                    conversation_id, existing_owner, client_id
-                );
-                return false;
-            }
+        if let Some(existing_owner) = owners.get(conversation_id)
+            && existing_owner != client_id
+        {
+            // Already owned by another client
+            debug!(
+                "Conversation {} already owned by {}, cannot claim for {}",
+                conversation_id, existing_owner, client_id
+            );
+            return false;
         }
 
         // Claim or refresh ownership
@@ -611,7 +611,13 @@ async fn handle_socket(
                                 }
 
                                 if let Err(e) = broker
-                                    .handle_response(request_id, original_id, content, artifacts)
+                                    .handle_response(
+                                        request_id,
+                                        original_id,
+                                        content,
+                                        artifacts,
+                                        Some(client_id_str.to_string()),
+                                    )
                                     .await
                                 {
                                     error!("Failed to handle response: {}", e);
@@ -721,6 +727,8 @@ mod tests {
                 webhook_path: "/line/callback".to_string(),
                 skip_signature: true,
                 process_redeliveries: true,
+                auto_loading_indicator: true,
+                auto_mark_as_read: true,
             },
             websocket: crate::config::WebSocketConfig {
                 path: "/ws".to_string(),

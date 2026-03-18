@@ -3,10 +3,10 @@
 //! REST API endpoints for the Relationship Management System using Axum 0.8.
 
 use axum::{
+    Router,
     extract::{Path, Query, State},
     response::{IntoResponse, Json},
     routing::{delete, get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -104,16 +104,10 @@ pub fn rms_routes() -> Router<RmsState> {
         .route("/relationships", get(get_relationships))
         .route("/relationships", post(set_relationship))
         .route("/relationships/{entity_id}", get(get_relationship))
-        .route(
-            "/relationships/{entity_id}",
-            delete(remove_relationship),
-        )
+        .route("/relationships/{entity_id}", delete(remove_relationship))
         // Dispatch Rules
         .route("/dispatch-rules", get(get_dispatch_rules))
-        .route(
-            "/dispatch-rules/{conv_id}",
-            get(get_dispatch_rule),
-        )
+        .route("/dispatch-rules/{conv_id}", get(get_dispatch_rule))
         // Import/Export
         .route("/import", post(import_relationships))
         .route("/export", get(export_relationships))
@@ -123,32 +117,23 @@ pub fn rms_routes() -> Router<RmsState> {
 
 // ========== Status ==========
 
-async fn get_status(
-    State(rms): State<RmsState>,
-) -> impl IntoResponse {
+async fn get_status(State(rms): State<RmsState>) -> impl IntoResponse {
     match rms.get_status().await {
         Ok(status) => Json(ApiResponse::success(status)),
-        Err(e) => {
-            Json(ApiResponse::<SystemStatus>::error(e.to_string()))
-        }
+        Err(e) => Json(ApiResponse::<SystemStatus>::error(e.to_string())),
     }
 }
 
 // ========== Clients ==========
 
-async fn get_clients(
-    State(rms): State<RmsState>,
-) -> impl IntoResponse {
+async fn get_clients(State(rms): State<RmsState>) -> impl IntoResponse {
     match rms.get_clients().await {
         Ok(clients) => Json(ApiResponse::success(clients)),
         Err(e) => Json(ApiResponse::<Vec<ClientInfo>>::error(e.to_string())),
     }
 }
 
-async fn get_client(
-    State(rms): State<RmsState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_client(State(rms): State<RmsState>, Path(id): Path<String>) -> impl IntoResponse {
     match rms.get_client(&id).await {
         Ok(Some(client)) => Json(ApiResponse::success(client)),
         Ok(None) => Json(ApiResponse::<ClientInfo>::error("Client not found")),
@@ -163,7 +148,9 @@ async fn get_entities(
     Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
     let filter = EntityFilter {
-        entity_type: query.entity_type.and_then(|s| LineEntityType::parse_entity_type(&s)),
+        entity_type: query
+            .entity_type
+            .and_then(|s| LineEntityType::parse_entity_type(&s)),
         has_relationship: query.has_relationship,
         search: query.search,
         limit: query.limit,
@@ -180,14 +167,13 @@ async fn get_entities(
                 limit: query.limit,
             }))
         }
-        Err(e) => Json(ApiResponse::<PaginatedResponse<LineEntity>>::error(e.to_string())),
+        Err(e) => Json(ApiResponse::<PaginatedResponse<LineEntity>>::error(
+            e.to_string(),
+        )),
     }
 }
 
-async fn get_entity(
-    State(rms): State<RmsState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_entity(State(rms): State<RmsState>, Path(id): Path<String>) -> impl IntoResponse {
     match rms.get_entity(&id).await {
         Ok(Some(entity)) => Json(ApiResponse::success(entity)),
         Ok(None) => Json(ApiResponse::<LineEntity>::error("Entity not found")),
@@ -195,10 +181,7 @@ async fn get_entity(
     }
 }
 
-async fn refresh_entity(
-    State(rms): State<RmsState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn refresh_entity(State(rms): State<RmsState>, Path(id): Path<String>) -> impl IntoResponse {
     match rms.refresh_entity(&id).await {
         Ok(Some(entity)) => Json(ApiResponse::success(entity)),
         Ok(None) => Json(ApiResponse::<LineEntity>::error("Entity not found")),
@@ -208,9 +191,7 @@ async fn refresh_entity(
 
 // ========== Relationships ==========
 
-async fn get_relationships(
-    State(rms): State<RmsState>,
-) -> impl IntoResponse {
+async fn get_relationships(State(rms): State<RmsState>) -> impl IntoResponse {
     match rms.get_relationships().await {
         Ok(relationships) => Json(ApiResponse::success(relationships)),
         Err(e) => Json(ApiResponse::<Vec<Relationship>>::error(e.to_string())),
@@ -267,7 +248,9 @@ async fn get_dispatch_rule(
 ) -> impl IntoResponse {
     match rms.get_dispatch_rule(&conv_id).await {
         Ok(Some(rule)) => Json(ApiResponse::success(rule)),
-        Ok(None) => Json(ApiResponse::<DispatchRule>::error("Dispatch rule not found")),
+        Ok(None) => Json(ApiResponse::<DispatchRule>::error(
+            "Dispatch rule not found",
+        )),
         Err(e) => Json(ApiResponse::<DispatchRule>::error(e.to_string())),
     }
 }

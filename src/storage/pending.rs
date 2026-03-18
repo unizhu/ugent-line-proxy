@@ -255,6 +255,7 @@ mod tests {
             ),
             webhook_event_id: "event-789".to_string(),
             client_id: None,
+            mark_as_read_token: None,
         }
     }
 

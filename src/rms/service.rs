@@ -144,8 +144,13 @@ impl RelationshipManagerService {
     }
 
     /// Get relationship for a specific entity
-    pub async fn get_relationship(&self, entity_id: &str) -> Result<Option<Relationship>, RmsError> {
-        self.rms_storage.get_relationship(entity_id).map_err(Into::into)
+    pub async fn get_relationship(
+        &self,
+        entity_id: &str,
+    ) -> Result<Option<Relationship>, RmsError> {
+        self.rms_storage
+            .get_relationship(entity_id)
+            .map_err(Into::into)
     }
 
     /// Get computed dispatch rules (relationships + runtime state)
@@ -158,9 +163,7 @@ impl RelationshipManagerService {
             let last_routed = self
                 .rms_storage
                 .get_last_dispatch_time(&rel.line_entity_id)?;
-            let message_count = self
-                .rms_storage
-                .get_message_count(&rel.line_entity_id)?;
+            let message_count = self.rms_storage.get_message_count(&rel.line_entity_id)?;
 
             rules.push(DispatchRule {
                 conversation_id: rel.line_entity_id.clone(),
@@ -174,9 +177,7 @@ impl RelationshipManagerService {
         }
 
         // Also include entities without relationships (broadcast mode)
-        let entities = self
-            .rms_storage
-            .get_entities(&EntityFilter::default())?;
+        let entities = self.rms_storage.get_entities(&EntityFilter::default())?;
         for entity in entities {
             if !rules.iter().any(|r| r.conversation_id == entity.id) {
                 rules.push(DispatchRule {
@@ -282,8 +283,7 @@ impl RelationshipManagerService {
         );
 
         // Notify the runtime about the change
-        self.ws_manager
-            .set_conversation_owner(entity_id, client_id);
+        self.ws_manager.set_conversation_owner(entity_id, client_id);
 
         Ok(rel)
     }
@@ -372,7 +372,8 @@ impl RelationshipManagerService {
         // Remove auto-detected relationships that no longer have runtime owners
         for stored in &stored_relationships {
             if !stored.is_manual && !runtime_owners.contains_key(&stored.line_entity_id) {
-                self.rms_storage.remove_relationship(&stored.line_entity_id)?;
+                self.rms_storage
+                    .remove_relationship(&stored.line_entity_id)?;
                 removed += 1;
             }
         }
@@ -399,14 +400,14 @@ impl RelationshipManagerService {
 
         for import in imports {
             // Ensure entity exists
-            if self.rms_storage.get_entity(&import.entity_id)?.is_none() {
-                if let Err(e) = self.refresh_entity(&import.entity_id).await {
-                    errors.push(format!(
-                        "Failed to refresh entity {}: {}",
-                        import.entity_id, e
-                    ));
-                    continue;
-                }
+            if self.rms_storage.get_entity(&import.entity_id)?.is_none()
+                && let Err(e) = self.refresh_entity(&import.entity_id).await
+            {
+                errors.push(format!(
+                    "Failed to refresh entity {}: {}",
+                    import.entity_id, e
+                ));
+                continue;
             }
 
             // Check if relationship already exists

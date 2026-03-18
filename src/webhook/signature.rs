@@ -3,7 +3,7 @@
 //! LINE Platform signs all webhook requests with HMAC-SHA256 using the Channel Secret.
 //! This module provides functions to verify these signatures.
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
