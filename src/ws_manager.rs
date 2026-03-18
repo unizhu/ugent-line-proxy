@@ -96,7 +96,7 @@ impl WebSocketManager {
 
     /// Get the storage reference (if enabled)
     pub fn storage(&self) -> Option<&Storage> {
-        self.storage.as_ref().map(|s| s.as_ref())
+        self.storage.as_ref().map(AsRef::as_ref)
     }
 
     /// Get the number of connected clients
@@ -139,7 +139,7 @@ impl WebSocketManager {
         let mut failed_count = 0;
         let total_clients = self.clients.len();
 
-        for entry in self.clients.iter() {
+        for entry in &self.clients {
             let client_id = entry.key().clone();
             let tx = entry.value().clone();
             if tx.send(message.clone()).await.is_err() {
@@ -258,8 +258,7 @@ impl WebSocketManager {
         let owners = self.conversation_owners.read();
         owners
             .get(conversation_id)
-            .map(|o| o == client_id)
-            .unwrap_or(false)
+            .is_some_and(|o| o == client_id)
     }
 
     /// Release all conversations owned by a client (on disconnect).
@@ -426,7 +425,7 @@ pub enum SendError {
 }
 
 /// Handle WebSocket upgrade request
-pub async fn websocket_handler(
+pub fn websocket_handler(
     ws: WebSocketUpgrade,
     State(ws_manager): State<Arc<WebSocketManager>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -435,8 +434,7 @@ pub async fn websocket_handler(
 }
 
 /// Handle WebSocket upgrade request with broker for response handling
-pub async fn websocket_handler_with_broker(
-    ws: WebSocketUpgrade,
+    pub fn websocket_handler_with_broker(    ws: WebSocketUpgrade,
     State(ws_manager): State<Arc<WebSocketManager>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     broker: Arc<MessageBroker>,
@@ -495,7 +493,7 @@ async fn handle_socket(
                             let _ = tx
                                 .send(WsProtocol::Error {
                                     code: 400,
-                                    message: format!("Invalid message format: {}", e),
+                                    message: format!("Invalid message format: {e}"),
                                 })
                                 .await;
                             continue;

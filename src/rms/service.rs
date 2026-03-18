@@ -8,7 +8,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use super::storage::RmsStorage;
-use super::types::*;
+use super::types::{ClientInfo, RmsError, EntityFilter, LineEntity, Relationship, DispatchRule, SystemStatus, LineEntityType, SyncResult, RelationshipImport, ImportResult};
 use crate::line_api::LineApiClient;
 use crate::storage::Storage;
 use crate::ws_manager::WebSocketManager;
@@ -55,12 +55,12 @@ impl RelationshipManagerService {
     // ========== Query Operations ==========
 
     /// Get all connected UGENT clients with their owned conversation counts
-    pub async fn get_clients(&self) -> Result<Vec<ClientInfo>, RmsError> {
+    pub fn get_clients(&self) -> Result<Vec<ClientInfo>, RmsError> {
         let connected_ids = self.ws_manager.get_connected_client_ids();
         let mut clients = Vec::new();
 
         for client_id in connected_ids {
-            let info = self.get_client(&client_id).await?;
+            let info = self.get_client(&client_id)?;
             if let Some(info) = info {
                 clients.push(info);
             }
@@ -88,7 +88,7 @@ impl RelationshipManagerService {
     }
 
     /// Get a specific client by ID
-    pub async fn get_client(&self, client_id: &str) -> Result<Option<ClientInfo>, RmsError> {
+    pub fn get_client(&self, client_id: &str) -> Result<Option<ClientInfo>, RmsError> {
         let is_connected = self.ws_manager.is_client_connected(client_id);
 
         let owned_conversations = self
@@ -122,8 +122,8 @@ impl RelationshipManagerService {
     }
 
     /// Get all LINE entities with optional filter
-    pub async fn get_entities(&self, filter: EntityFilter) -> Result<Vec<LineEntity>, RmsError> {
-        self.rms_storage.get_entities(&filter).map_err(Into::into)
+    pub fn get_entities(&self, filter: &EntityFilter) -> Result<Vec<LineEntity>, RmsError> {
+        self.rms_storage.get_entities(filter).map_err(Into::into)
     }
 
     /// Get entity by ID, optionally refreshing from LINE API
@@ -139,12 +139,12 @@ impl RelationshipManagerService {
     }
 
     /// Get all relationships
-    pub async fn get_relationships(&self) -> Result<Vec<Relationship>, RmsError> {
+    pub fn get_relationships(&self) -> Result<Vec<Relationship>, RmsError> {
         self.rms_storage.get_relationships().map_err(Into::into)
     }
 
     /// Get relationship for a specific entity
-    pub async fn get_relationship(
+    pub fn get_relationship(
         &self,
         entity_id: &str,
     ) -> Result<Option<Relationship>, RmsError> {
@@ -154,7 +154,7 @@ impl RelationshipManagerService {
     }
 
     /// Get computed dispatch rules (relationships + runtime state)
-    pub async fn get_dispatch_rules(&self) -> Result<Vec<DispatchRule>, RmsError> {
+    pub fn get_dispatch_rules(&self) -> Result<Vec<DispatchRule>, RmsError> {
         let relationships = self.rms_storage.get_relationships()?;
         let mut rules = Vec::new();
 
@@ -196,46 +196,43 @@ impl RelationshipManagerService {
     }
 
     /// Get dispatch rule for a specific conversation
-    pub async fn get_dispatch_rule(
+    pub fn get_dispatch_rule(
         &self,
         conversation_id: &str,
     ) -> Result<Option<DispatchRule>, RmsError> {
         let rel = self.rms_storage.get_relationship(conversation_id)?;
 
-        match rel {
-            Some(r) => {
-                let is_connected = self.ws_manager.is_client_connected(&r.client_id);
-                let last_routed = self.rms_storage.get_last_dispatch_time(conversation_id)?;
-                let message_count = self.rms_storage.get_message_count(conversation_id)?;
+        if let Some(r) = rel {
+            let is_connected = self.ws_manager.is_client_connected(&r.client_id);
+            let last_routed = self.rms_storage.get_last_dispatch_time(conversation_id)?;
+            let message_count = self.rms_storage.get_message_count(conversation_id)?;
 
-                Ok(Some(DispatchRule {
-                    conversation_id: conversation_id.to_string(),
-                    entity_type: r.entity_type,
-                    assigned_client: Some(r.client_id),
-                    assigned_client_connected: is_connected,
-                    is_manual: r.is_manual,
-                    last_routed_at: last_routed,
-                    message_count,
-                }))
-            }
-            None => {
-                // No relationship, check if entity exists
-                let entity = self.rms_storage.get_entity(conversation_id)?;
-                Ok(entity.map(|e| DispatchRule {
-                    conversation_id: conversation_id.to_string(),
-                    entity_type: e.entity_type,
-                    assigned_client: None,
-                    assigned_client_connected: false,
-                    is_manual: false,
-                    last_routed_at: e.last_message_at,
-                    message_count: 0,
-                }))
-            }
+            Ok(Some(DispatchRule {
+                conversation_id: conversation_id.to_string(),
+                entity_type: r.entity_type,
+                assigned_client: Some(r.client_id),
+                assigned_client_connected: is_connected,
+                is_manual: r.is_manual,
+                last_routed_at: last_routed,
+                message_count,
+            }))
+        } else {
+            // No relationship, check if entity exists
+            let entity = self.rms_storage.get_entity(conversation_id)?;
+            Ok(entity.map(|e| DispatchRule {
+                conversation_id: conversation_id.to_string(),
+                entity_type: e.entity_type,
+                assigned_client: None,
+                assigned_client_connected: false,
+                is_manual: false,
+                last_routed_at: e.last_message_at,
+                message_count: 0,
+            }))
         }
     }
 
     /// Get system status summary
-    pub async fn get_status(&self) -> Result<SystemStatus, RmsError> {
+    pub fn get_status(&self) -> Result<SystemStatus, RmsError> {
         let connected_clients = self.ws_manager.client_count();
         let total_entities = self.rms_storage.count_entities()?;
         let total_relationships = self.rms_storage.count_relationships()?;
@@ -289,7 +286,7 @@ impl RelationshipManagerService {
     }
 
     /// Remove a relationship (revert to auto-routing)
-    pub async fn remove_relationship(&self, entity_id: &str) -> Result<bool, RmsError> {
+    pub fn remove_relationship(&self, entity_id: &str) -> Result<bool, RmsError> {
         let removed = self.rms_storage.remove_relationship(entity_id)?;
 
         if removed {
@@ -337,7 +334,7 @@ impl RelationshipManagerService {
     }
 
     /// Sync relationships with runtime ownership state
-    pub async fn sync_ownership(&self) -> Result<SyncResult, RmsError> {
+    pub fn sync_ownership(&self) -> Result<SyncResult, RmsError> {
         let mut added = 0;
         let mut updated = 0;
         let mut removed = 0;
@@ -448,26 +445,26 @@ impl RelationshipManagerService {
     }
 
     /// Export all relationships to JSON
-    pub async fn export_relationships(&self) -> Result<Vec<Relationship>, RmsError> {
+    pub fn export_relationships(&self) -> Result<Vec<Relationship>, RmsError> {
         self.rms_storage.get_relationships().map_err(Into::into)
     }
 
     /// Clear all manual relationships
-    pub async fn clear_manual_relationships(&self) -> Result<usize, RmsError> {
+    pub fn clear_manual_relationships(&self) -> Result<usize, RmsError> {
         let count = self.rms_storage.clear_manual_relationships()?;
         info!(count, "Manual relationships cleared");
         Ok(count)
     }
 
     /// Touch entity (update last_message_at)
-    pub async fn touch_entity(&self, entity_id: &str) -> Result<(), RmsError> {
+    pub fn touch_entity(&self, entity_id: &str) -> Result<(), RmsError> {
         let now = chrono::Utc::now().timestamp();
         self.rms_storage.touch_entity(entity_id, now)?;
         Ok(())
     }
 
     /// Record a dispatch event
-    pub async fn record_dispatch(
+    pub fn record_dispatch(
         &self,
         conversation_id: &str,
         client_id: &str,
@@ -476,7 +473,7 @@ impl RelationshipManagerService {
     ) -> Result<(), RmsError> {
         self.rms_storage
             .record_dispatch(conversation_id, client_id, message_id, success)?;
-        self.touch_entity(conversation_id).await?;
+        self.touch_entity(conversation_id)?;
         Ok(())
     }
 }

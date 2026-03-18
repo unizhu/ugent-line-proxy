@@ -81,7 +81,7 @@ impl MessageBroker {
     }
 
     /// Get protocol version
-    pub fn protocol_version() -> u32 {
+    pub const fn protocol_version() -> u32 {
         PROTOCOL_VERSION
     }
 
@@ -124,10 +124,10 @@ impl MessageBroker {
             match self.ws_manager.send_to(&owner_client_id, ws_msg).await {
                 Ok(()) => {
                     // Track pending message
-                    self.track_pending_message(original_id.clone(), pending);
+                    self.track_pending_message(&original_id, &pending);
                     return Ok(());
                 }
-                Err(SendError::ClientDisconnected) | Err(SendError::ClientNotFound) => {
+                Err(SendError::ClientDisconnected | SendError::ClientNotFound) => {
                     warn!(
                         "Owner client {} disconnected, releasing ownership and falling back to broadcast",
                         owner_client_id
@@ -146,7 +146,7 @@ impl MessageBroker {
         );
 
         // Track pending message
-        self.track_pending_message(original_id.clone(), pending);
+        self.track_pending_message(&original_id, &pending);
 
         let ws_msg = WsProtocol::Message {
             data: Box::new(message),
@@ -159,9 +159,9 @@ impl MessageBroker {
     }
 
     /// Track a pending message
-    fn track_pending_message(&self, original_id: String, pending: PendingMessage) {
+    fn track_pending_message(&self, original_id: &str, pending: &PendingMessage) {
         let mut pending_map = self.pending_messages.write();
-        pending_map.insert(original_id.clone(), pending.clone());
+        pending_map.insert(original_id.to_string(), pending.clone());
 
         // Cleanup expired entries if over limit
         if pending_map.len() > MAX_PENDING_MESSAGES {
@@ -183,7 +183,7 @@ impl MessageBroker {
 
         // Persist to storage if enabled
         if let Some(ref storage) = self.storage {
-            if let Err(e) = storage.pending().store(&pending) {
+            if let Err(e) = storage.pending().store(pending) {
                 warn!("Failed to persist pending message: {}", e);
             }
             // Record metric
@@ -221,23 +221,20 @@ impl MessageBroker {
             pending_map.remove(&original_id)
         };
 
-        let pending = match pending {
-            Some(p) => p,
-            None => {
-                warn!("No pending message found for original_id={}", original_id);
-                // Send failure ResponseResult if request_id present
-                if let Some(ref req_id) = request_id {
-                    self.send_response_result(
-                        Some(req_id.clone()),
-                        original_id.clone(),
-                        false,
-                        Some("No pending message found".to_string()),
-                        responding_client_id.as_deref(),
-                    )
-                    .await?;
-                }
-                return Err(BrokerError::NoPendingMessage(original_id));
+        let Some(pending) = pending else {
+            warn!("No pending message found for original_id={}", original_id);
+            // Send failure ResponseResult if request_id present
+            if let Some(ref req_id) = request_id {
+                self.send_response_result(
+                    Some(req_id.clone()),
+                    original_id.clone(),
+                    false,
+                    Some("No pending message found".to_string()),
+                    responding_client_id.as_deref(),
+                )
+                .await?;
             }
+            return Err(BrokerError::NoPendingMessage(original_id));
         };
 
         // Build LINE messages

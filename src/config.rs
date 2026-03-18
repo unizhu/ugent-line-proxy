@@ -45,8 +45,8 @@ impl Config {
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self, ConfigError> {
         let server = ServerConfig::from_env()?;
-        let line = LineConfig::from_env()?;
-        let websocket = WebSocketConfig::from_env()?;
+        let line = LineConfig::from_env();
+        let websocket = WebSocketConfig::from_env();
         let media = MediaConfig::from_env();
         let logging = LoggingConfig::from_env();
         let storage = StorageConfig::from_env();
@@ -176,12 +176,12 @@ fn ensure_leading_slash(path: &str) -> String {
     if path.starts_with('/') {
         path.to_string()
     } else {
-        format!("/{}", path)
+        format!("/{path}")
     }
 }
 
 impl LineConfig {
-    fn from_env() -> Result<Self, ConfigError> {
+    fn from_env() -> Self {
         let channel_secret = std::env::var("LINE_CHANNEL_SECRET").unwrap_or_default();
 
         let channel_access_token = std::env::var("LINE_CHANNEL_ACCESS_TOKEN").unwrap_or_default();
@@ -206,7 +206,7 @@ impl LineConfig {
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
 
-        Ok(Self {
+        Self {
             channel_secret,
             channel_access_token,
             webhook_path,
@@ -214,7 +214,7 @@ impl LineConfig {
             process_redeliveries,
             auto_loading_indicator,
             auto_mark_as_read,
-        })
+        }
     }
 }
 
@@ -254,7 +254,7 @@ fn default_max_message_size() -> usize {
 }
 
 impl WebSocketConfig {
-    fn from_env() -> Result<Self, ConfigError> {
+    fn from_env() -> Self {
         let path = std::env::var("LINE_PROXY_WS_PATH").unwrap_or_else(|_| default_ws_path());
         let path = ensure_leading_slash(&path);
 
@@ -275,13 +275,13 @@ impl WebSocketConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(default_max_message_size());
 
-        Ok(Self {
+        Self {
             path,
             api_key,
             ping_interval_secs,
             timeout_secs,
             max_message_size,
-        })
+        }
     }
 
     /// Check if API key is configured
@@ -319,8 +319,7 @@ fn default_cache_ttl() -> u64 {
 impl MediaConfig {
     fn from_env() -> Self {
         let cache_dir = std::env::var("LINE_PROXY_MEDIA_CACHE_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| default_cache_dir());
+            .map_or_else(|_| default_cache_dir(), PathBuf::from);
 
         let max_size_mb = std::env::var("LINE_PROXY_MEDIA_CACHE_MAX_MB")
             .ok()

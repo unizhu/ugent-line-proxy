@@ -7,7 +7,7 @@ use comfy_table::{Cell, Color, Table, presets::UTF8_FULL};
 use std::io::{self, Read};
 
 use super::service::RelationshipManagerService;
-use super::types::*;
+use super::types::{EntityFilter, LineEntityType, RelationshipImport, SystemStatus, ClientInfo, LineEntity, Relationship, DispatchRule};
 
 /// RMS CLI - Relationship Management System
 #[derive(Parser, Debug)]
@@ -136,18 +136,18 @@ async fn execute(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Status => {
-            let status = rms.get_status().await?;
+            let status = rms.get_status()?;
             print_status(&status);
         }
 
         Commands::Clients { cmd } => match cmd {
             ClientCommands::List => {
-                let clients = rms.get_clients().await?;
+                let clients = rms.get_clients()?;
                 print_clients(&clients);
             }
-            ClientCommands::Show { id } => match rms.get_client(&id).await? {
+            ClientCommands::Show { id } => match rms.get_client(&id)? {
                 Some(client) => print_client_detail(&client),
-                None => println!("Client not found: {}", id),
+                None => println!("Client not found: {id}"),
             },
         },
 
@@ -176,8 +176,8 @@ async fn execute(
                     offset: None,
                 };
 
-                let entities = rms.get_entities(filter).await?;
-                let relationships = rms.get_relationships().await?;
+                let entities = rms.get_entities(&filter)?;
+                let relationships = rms.get_relationships()?;
                 let rel_map: std::collections::HashMap<_, _> = relationships
                     .iter()
                     .map(|r| (r.line_entity_id.as_str(), r))
@@ -187,26 +187,26 @@ async fn execute(
             }
             EntityCommands::Show { id } => match rms.get_entity(&id).await? {
                 Some(entity) => print_entity_detail(&entity),
-                None => println!("Entity not found: {}", id),
+                None => println!("Entity not found: {id}"),
             },
             EntityCommands::Refresh { id } => match rms.refresh_entity(&id).await? {
                 Some(entity) => {
                     println!("Entity refreshed:");
                     print_entity_detail(&entity);
                 }
-                None => println!("Failed to refresh entity: {}", id),
+                None => println!("Failed to refresh entity: {id}"),
             },
         },
 
         Commands::Relationships { cmd } => match cmd {
             RelationshipCommands::List => {
-                let relationships = rms.get_relationships().await?;
+                let relationships = rms.get_relationships()?;
                 print_relationships(&relationships);
             }
             RelationshipCommands::Show { entity_id } => {
-                match rms.get_relationship(&entity_id).await? {
+                match rms.get_relationship(&entity_id)? {
                     Some(rel) => print_relationship_detail(&rel),
-                    None => println!("Relationship not found for entity: {}", entity_id),
+                    None => println!("Relationship not found for entity: {entity_id}"),
                 }
             }
             RelationshipCommands::Set {
@@ -221,27 +221,27 @@ async fn execute(
                 print_relationship_detail(&rel);
             }
             RelationshipCommands::Remove { entity_id } => {
-                if rms.remove_relationship(&entity_id).await? {
-                    println!("✓ Relationship removed for entity: {}", entity_id);
+                if rms.remove_relationship(&entity_id)? {
+                    println!("✓ Relationship removed for entity: {entity_id}");
                 } else {
-                    println!("Relationship not found for entity: {}", entity_id);
+                    println!("Relationship not found for entity: {entity_id}");
                 }
             }
             RelationshipCommands::Clear => {
-                let count = rms.clear_manual_relationships().await?;
-                println!("✓ Cleared {} manual relationships", count);
+                let count = rms.clear_manual_relationships()?;
+                println!("✓ Cleared {count} manual relationships");
             }
         },
 
         Commands::Rules { cmd } => match cmd {
             RuleCommands::List => {
-                let rules = rms.get_dispatch_rules().await?;
+                let rules = rms.get_dispatch_rules()?;
                 print_dispatch_rules(&rules);
             }
             RuleCommands::Show { conversation_id } => {
-                match rms.get_dispatch_rule(&conversation_id).await? {
+                match rms.get_dispatch_rule(&conversation_id)? {
                     Some(rule) => print_dispatch_rule_detail(&rule),
-                    None => println!("Dispatch rule not found for: {}", conversation_id),
+                    None => println!("Dispatch rule not found for: {conversation_id}"),
                 }
             }
         },
@@ -259,19 +259,19 @@ async fn execute(
             if !result.errors.is_empty() {
                 println!("  Errors:");
                 for err in result.errors {
-                    println!("    - {}", err);
+                    println!("    - {err}");
                 }
             }
         }
 
         Commands::Export => {
-            let relationships = rms.export_relationships().await?;
+            let relationships = rms.export_relationships()?;
             let json = serde_json::to_string_pretty(&relationships)?;
-            println!("{}", json);
+            println!("{json}");
         }
 
         Commands::Sync => {
-            let result = rms.sync_ownership().await?;
+            let result = rms.sync_ownership()?;
             println!("Sync complete:");
             println!("  Added: {}", result.added);
             println!("  Updated: {}", result.updated);
@@ -306,7 +306,7 @@ fn print_status(status: &SystemStatus) {
     println!("│ Pending Messages:      {:<27}│", status.pending_messages);
 
     let uptime = format_uptime(status.uptime_secs);
-    println!("│ Uptime:                {:<27}│", uptime);
+    println!("│ Uptime:                {uptime:<27}│");
     println!("└─────────────────────────────────────────────────────┘");
 }
 
@@ -316,11 +316,11 @@ fn format_uptime(secs: u64) -> String {
     let mins = (secs % 3600) / 60;
 
     if days > 0 {
-        format!("{}d {}h {}m", days, hours, mins)
+        format!("{days}d {hours}h {mins}m")
     } else if hours > 0 {
-        format!("{}h {}m", hours, mins)
+        format!("{hours}h {mins}m")
     } else {
-        format!("{}m", mins)
+        format!("{mins}m")
     }
 }
 
@@ -346,7 +346,7 @@ fn print_clients(clients: &[ClientInfo]) {
         ]);
     }
 
-    println!("{}", table);
+    println!("{table}");
 }
 
 fn print_client_detail(client: &ClientInfo) {
@@ -360,8 +360,7 @@ fn print_client_detail(client: &ClientInfo) {
         "  Connected At: {}",
         client
             .connected_at
-            .map(format_timestamp)
-            .unwrap_or_else(|| "N/A".to_string())
+            .map_or_else(|| "N/A".to_string(), format_timestamp)
     );
     println!(
         "  Last Activity: {}",
@@ -405,7 +404,7 @@ fn print_entities(
         ]);
     }
 
-    println!("{}", table);
+    println!("{table}");
 }
 
 fn print_entity_detail(entity: &LineEntity) {
@@ -424,8 +423,7 @@ fn print_entity_detail(entity: &LineEntity) {
         "  Last Message: {}",
         entity
             .last_message_at
-            .map(format_timestamp)
-            .unwrap_or_else(|| "N/A".to_string())
+            .map_or_else(|| "N/A".to_string(), format_timestamp)
     );
     println!("  Created: {}", format_timestamp(entity.created_at));
     println!("  Updated: {}", format_timestamp(entity.updated_at));
@@ -446,7 +444,7 @@ fn print_relationships(relationships: &[Relationship]) {
         ]);
     }
 
-    println!("{}", table);
+    println!("{table}");
 }
 
 fn print_relationship_detail(rel: &Relationship) {
@@ -461,7 +459,7 @@ fn print_relationship_detail(rel: &Relationship) {
     println!("  Created:    {}", format_timestamp(rel.created_at));
     println!("  Updated:    {}", format_timestamp(rel.updated_at));
     if let Some(notes) = &rel.notes {
-        println!("  Notes:      {}", notes);
+        println!("  Notes:      {notes}");
     }
 }
 
@@ -500,7 +498,7 @@ fn print_dispatch_rules(rules: &[DispatchRule]) {
         ]);
     }
 
-    println!("{}", table);
+    println!("{table}");
 }
 
 fn print_dispatch_rule_detail(rule: &DispatchRule) {
@@ -526,14 +524,12 @@ fn print_dispatch_rule_detail(rule: &DispatchRule) {
     println!(
         "  Last Routed: {}",
         rule.last_routed_at
-            .map(format_timestamp)
-            .unwrap_or_else(|| "N/A".to_string())
+            .map_or_else(|| "N/A".to_string(), format_timestamp)
     );
     println!("  Message Count: {}", rule.message_count);
 }
 
 fn format_timestamp(ts: i64) -> String {
     chrono::DateTime::from_timestamp(ts, 0)
-        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_else(|| ts.to_string())
+        .map_or_else(|| ts.to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
 }

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::service::RelationshipManagerService;
-use super::types::*;
+use super::types::{RelationshipImport, SystemStatus, ClientInfo, EntityFilter, LineEntityType, LineEntity, Relationship, DispatchRule, ImportResult, SyncResult};
 
 /// RMS API state
 pub type RmsState = Arc<RelationshipManagerService>;
@@ -118,7 +118,7 @@ pub fn rms_routes() -> Router<RmsState> {
 // ========== Status ==========
 
 async fn get_status(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.get_status().await {
+    match rms.get_status() {
         Ok(status) => Json(ApiResponse::success(status)),
         Err(e) => Json(ApiResponse::<SystemStatus>::error(e.to_string())),
     }
@@ -127,14 +127,14 @@ async fn get_status(State(rms): State<RmsState>) -> impl IntoResponse {
 // ========== Clients ==========
 
 async fn get_clients(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.get_clients().await {
+    match rms.get_clients() {
         Ok(clients) => Json(ApiResponse::success(clients)),
         Err(e) => Json(ApiResponse::<Vec<ClientInfo>>::error(e.to_string())),
     }
 }
 
 async fn get_client(State(rms): State<RmsState>, Path(id): Path<String>) -> impl IntoResponse {
-    match rms.get_client(&id).await {
+    match rms.get_client(&id) {
         Ok(Some(client)) => Json(ApiResponse::success(client)),
         Ok(None) => Json(ApiResponse::<ClientInfo>::error("Client not found")),
         Err(e) => Json(ApiResponse::<ClientInfo>::error(e.to_string())),
@@ -157,7 +157,7 @@ async fn get_entities(
         offset: query.offset,
     };
 
-    match rms.get_entities(filter).await {
+    match rms.get_entities(&filter) {
         Ok(entities) => {
             let total = entities.len();
             Json(ApiResponse::success(PaginatedResponse {
@@ -192,7 +192,7 @@ async fn refresh_entity(State(rms): State<RmsState>, Path(id): Path<String>) -> 
 // ========== Relationships ==========
 
 async fn get_relationships(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.get_relationships().await {
+    match rms.get_relationships() {
         Ok(relationships) => Json(ApiResponse::success(relationships)),
         Err(e) => Json(ApiResponse::<Vec<Relationship>>::error(e.to_string())),
     }
@@ -202,7 +202,7 @@ async fn get_relationship(
     State(rms): State<RmsState>,
     Path(entity_id): Path<String>,
 ) -> impl IntoResponse {
-    match rms.get_relationship(&entity_id).await {
+    match rms.get_relationship(&entity_id) {
         Ok(Some(rel)) => Json(ApiResponse::success(rel)),
         Ok(None) => Json(ApiResponse::<Relationship>::error("Relationship not found")),
         Err(e) => Json(ApiResponse::<Relationship>::error(e.to_string())),
@@ -226,7 +226,7 @@ async fn remove_relationship(
     State(rms): State<RmsState>,
     Path(entity_id): Path<String>,
 ) -> impl IntoResponse {
-    match rms.remove_relationship(&entity_id).await {
+    match rms.remove_relationship(&entity_id) {
         Ok(true) => Json(ApiResponse::success(true)),
         Ok(false) => Json(ApiResponse::<bool>::error("Relationship not found")),
         Err(e) => Json(ApiResponse::<bool>::error(e.to_string())),
@@ -236,7 +236,7 @@ async fn remove_relationship(
 // ========== Dispatch Rules ==========
 
 async fn get_dispatch_rules(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.get_dispatch_rules().await {
+    match rms.get_dispatch_rules() {
         Ok(rules) => Json(ApiResponse::success(rules)),
         Err(e) => Json(ApiResponse::<Vec<DispatchRule>>::error(e.to_string())),
     }
@@ -246,7 +246,7 @@ async fn get_dispatch_rule(
     State(rms): State<RmsState>,
     Path(conv_id): Path<String>,
 ) -> impl IntoResponse {
-    match rms.get_dispatch_rule(&conv_id).await {
+    match rms.get_dispatch_rule(&conv_id) {
         Ok(Some(rule)) => Json(ApiResponse::success(rule)),
         Ok(None) => Json(ApiResponse::<DispatchRule>::error(
             "Dispatch rule not found",
@@ -268,21 +268,21 @@ async fn import_relationships(
 }
 
 async fn export_relationships(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.export_relationships().await {
+    match rms.export_relationships() {
         Ok(relationships) => Json(ApiResponse::success(relationships)),
         Err(e) => Json(ApiResponse::<Vec<Relationship>>::error(e.to_string())),
     }
 }
 
 async fn sync_ownership(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.sync_ownership().await {
+    match rms.sync_ownership() {
         Ok(result) => Json(ApiResponse::success(result)),
         Err(e) => Json(ApiResponse::<SyncResult>::error(e.to_string())),
     }
 }
 
 async fn clear_manual_relationships(State(rms): State<RmsState>) -> impl IntoResponse {
-    match rms.clear_manual_relationships().await {
+    match rms.clear_manual_relationships() {
         Ok(count) => Json(ApiResponse::success(count)),
         Err(e) => Json(ApiResponse::<usize>::error(e.to_string())),
     }

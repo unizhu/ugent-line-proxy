@@ -258,7 +258,7 @@ mod tests {
                 let config = DataConfig::from_env();
                 assert!(!config.enabled);
                 assert_eq!(config.db_type, DbType::Sqlite);
-            })
+            });
         });
     }
 }

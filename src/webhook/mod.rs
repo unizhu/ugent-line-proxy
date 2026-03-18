@@ -97,7 +97,7 @@ pub async fn handle_webhook(
     );
 
     // 4. Process each event
-    for evt in event.events.iter() {
+    for evt in &event.events {
         if let Err(e) = process_event(&broker, evt, &event.destination).await {
             error!("Failed to process event: {}", e);
             // Continue processing other events even if one fails

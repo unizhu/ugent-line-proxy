@@ -33,7 +33,7 @@ async fn main() -> anyhow::Result<()> {
     let config = match Config::from_env() {
         Ok(c) => Arc::new(c),
         Err(e) => {
-            eprintln!("Configuration error: {}", e);
+            eprintln!("Configuration error: {e}");
             std::process::exit(1);
         }
     };
@@ -163,7 +163,6 @@ async fn websocket_handler(
         axum::extract::ConnectInfo(addr),
         broker,
     )
-    .await
 }
 
 /// Shutdown signal handler
@@ -186,8 +185,8 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 
     info!("Shutdown signal received");

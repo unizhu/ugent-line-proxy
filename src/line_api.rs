@@ -101,7 +101,7 @@ impl LineApiClient {
         // LINE allows max 5 messages in a reply
         let messages: Vec<Value> = messages.into_iter().take(5).collect();
 
-        let url = format!("{}/message/reply", API_BASE);
+        let url = format!("{API_BASE}/message/reply");
         let body = json!({
             "replyToken": reply_token,
             "messages": messages
@@ -180,7 +180,7 @@ impl LineApiClient {
         // LINE allows max 5 messages in a push
         let messages: Vec<Value> = messages.into_iter().take(5).collect();
 
-        let url = format!("{}/message/push", API_BASE);
+        let url = format!("{API_BASE}/message/push");
         let body = json!({
             "to": to,
             "messages": messages
@@ -238,7 +238,7 @@ impl LineApiClient {
         &self,
         message_id: &str,
     ) -> Result<(Vec<u8>, String), LineApiError> {
-        let url = format!("{}/message/{}/content", DATA_API_BASE, message_id);
+        let url = format!("{DATA_API_BASE}/message/{message_id}/content");
 
         debug!("Downloading content: {}", message_id);
 
@@ -256,10 +256,7 @@ impl LineApiClient {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!("Content download failed: {} - {}", status, error_text);
-            return Err(LineApiError::DownloadFailed(format!(
-                "{}: {}",
-                status, error_text
-            )));
+            return Err(LineApiError::DownloadFailed(format!("{status}: {error_text}")));
         }
 
         // Get content type
@@ -282,7 +279,7 @@ impl LineApiClient {
 
     /// Download preview image for video/image
     pub async fn download_preview(&self, message_id: &str) -> Result<Vec<u8>, LineApiError> {
-        let url = format!("{}/message/{}/content/preview", DATA_API_BASE, message_id);
+        let url = format!("{DATA_API_BASE}/message/{message_id}/content/preview");
 
         debug!("Downloading preview: {}", message_id);
 
@@ -295,10 +292,7 @@ impl LineApiClient {
 
         let status = response.status();
         if !status.is_success() {
-            return Err(LineApiError::DownloadFailed(format!(
-                "Preview download failed: {}",
-                status
-            )));
+            return Err(LineApiError::DownloadFailed(format!("Preview download failed: {status}")));
         }
 
         let bytes = response.bytes().await?;
@@ -307,7 +301,7 @@ impl LineApiClient {
 
     /// Get user profile
     pub async fn get_profile(&self, user_id: &str) -> Result<UserProfile, LineApiError> {
-        let url = format!("{}/profile/{}", API_BASE, user_id);
+        let url = format!("{API_BASE}/profile/{user_id}");
 
         debug!("Getting profile for user: {}", user_id);
 
@@ -333,7 +327,7 @@ impl LineApiClient {
 
     /// Get bot info
     pub async fn get_bot_info(&self) -> Result<BotInfo, LineApiError> {
-        let url = format!("{}/info", API_BASE);
+        let url = format!("{API_BASE}/info");
 
         debug!("Getting bot info");
 
@@ -364,7 +358,7 @@ impl LineApiClient {
     ///
     /// API endpoint: POST /v2/bot/chat/loading/start
     pub async fn start_loading(&self, chat_id: &str) -> Result<(), LineApiError> {
-        let url = format!("{}/chat/loading/start", API_BASE);
+        let url = format!("{API_BASE}/chat/loading/start");
         let body = json!({
             "chatId": chat_id
         });
@@ -401,7 +395,7 @@ impl LineApiClient {
     ///
     /// API endpoint: POST /v2/bot/chat/markAsRead
     pub async fn mark_as_read(&self, mark_as_read_token: &str) -> Result<(), LineApiError> {
-        let url = format!("{}/chat/markAsRead", API_BASE);
+        let url = format!("{API_BASE}/chat/markAsRead");
         let body = json!({
             "markAsReadToken": mark_as_read_token
         });
@@ -436,7 +430,7 @@ impl LineApiClient {
 
     /// Get group summary
     pub async fn get_group_summary(&self, group_id: &str) -> Result<GroupSummary, LineApiError> {
-        let url = format!("{}/group/{}/summary", API_BASE, group_id);
+        let url = format!("{API_BASE}/group/{group_id}/summary");
 
         debug!("Getting group summary: {}", group_id);
 
@@ -465,7 +459,7 @@ impl LineApiClient {
         &self,
         group_id: &str,
     ) -> Result<MemberIdsResponse, LineApiError> {
-        let url = format!("{}/group/{}/members/ids", API_BASE, group_id);
+        let url = format!("{API_BASE}/group/{group_id}/members/ids");
 
         debug!("Getting group member IDs: {}", group_id);
 
@@ -495,7 +489,7 @@ impl LineApiClient {
         group_id: &str,
         user_id: &str,
     ) -> Result<UserProfile, LineApiError> {
-        let url = format!("{}/group/{}/member/{}", API_BASE, group_id, user_id);
+        let url = format!("{API_BASE}/group/{group_id}/member/{user_id}");
 
         debug!("Getting group member profile: {}/{}", group_id, user_id);
 
@@ -521,7 +515,7 @@ impl LineApiClient {
 
     /// Leave a group
     pub async fn leave_group(&self, group_id: &str) -> Result<(), LineApiError> {
-        let url = format!("{}/group/{}/leave", API_BASE, group_id);
+        let url = format!("{API_BASE}/group/{group_id}/leave");
 
         debug!("Leaving group: {}", group_id);
 
@@ -547,7 +541,7 @@ impl LineApiClient {
 
     /// Leave a room
     pub async fn leave_room(&self, room_id: &str) -> Result<(), LineApiError> {
-        let url = format!("{}/room/{}/leave", API_BASE, room_id);
+        let url = format!("{API_BASE}/room/{room_id}/leave");
 
         debug!("Leaving room: {}", room_id);
 

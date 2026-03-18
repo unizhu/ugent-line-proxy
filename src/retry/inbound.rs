@@ -121,11 +121,11 @@ impl InboundQueueWorker {
 
         loop {
             tokio::select! {
-                _ = self.shutdown.notified() => {
+                () = self.shutdown.notified() => {
                     info!("Inbound queue worker shutting down");
                     break;
                 }
-                _ = self.process_batch() => {}
+                () = self.process_batch() => {}
                 _ = cleanup_interval.tick() => {
                     self.cleanup_expired().await;
                 }
@@ -160,7 +160,7 @@ impl InboundQueueWorker {
 
         for entry in entries {
             tokio::select! {
-                _ = self.shutdown.notified() => {
+                () = self.shutdown.notified() => {
                     return;
                 }
                 result = self.process_entry(&entry) => {
@@ -261,7 +261,7 @@ impl InboundQueueWorker {
                     created_at: Utc::now().timestamp_millis(),
                 };
                 let _ = backend.enqueue_inbound(&requeue).await;
-                Err(format!("Client delivery failed: {}", e))
+                Err(format!("Client delivery failed: {e}"))
             }
         }
     }

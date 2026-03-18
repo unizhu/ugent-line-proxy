@@ -20,7 +20,7 @@ async fn main() {
     let config = match Config::from_env() {
         Ok(c) => Arc::new(c),
         Err(e) => {
-            eprintln!("Failed to load config: {}", e);
+            eprintln!("Failed to load config: {e}");
             std::process::exit(1);
         }
     };
@@ -30,7 +30,7 @@ async fn main() {
     let storage = match Storage::with_optional_path(db_path) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            eprintln!("Failed to initialize storage: {}", e);
+            eprintln!("Failed to initialize storage: {e}");
             std::process::exit(1);
         }
     };
@@ -48,7 +48,7 @@ async fn main() {
     // Parse and run CLI
     let cli = Cli::parse();
     if let Err(e) = ugent_line_proxy::rms::run_with_cli(cli, rms).await {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }

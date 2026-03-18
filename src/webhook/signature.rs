@@ -42,12 +42,9 @@ pub fn verify_signature(body: &[u8], signature: &str, channel_secret: &str) -> b
     };
 
     // Compute HMAC-SHA256
-    let mut mac = match HmacSha256::new_from_slice(channel_secret.as_bytes()) {
-        Ok(m) => m,
-        Err(_) => {
-            tracing::error!("Invalid key length for HMAC");
-            return false;
-        }
+    let Ok(mut mac) = HmacSha256::new_from_slice(channel_secret.as_bytes()) else {
+        tracing::error!("Invalid key length for HMAC");
+        return false;
     };
     mac.update(body);
     let result = mac.finalize();

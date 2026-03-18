@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 use rusqlite::Connection;
 use std::sync::Arc;
 
-use super::types::*;
+use super::types::{EntityFilter, LineEntity, LineEntityType, Relationship};
 use crate::storage::StorageError;
 
 /// RMS-specific storage operations
@@ -23,7 +23,7 @@ impl RmsStorage {
     /// Run schema migrations for RMS tables
     pub fn run_migrations(conn: &Connection) -> Result<(), StorageError> {
         conn.execute_batch(
-            r#"
+            r"
             -- LINE entities (contacts, groups, rooms)
             CREATE TABLE IF NOT EXISTS line_entities (
                 id TEXT PRIMARY KEY,
@@ -67,7 +67,7 @@ impl RmsStorage {
             CREATE INDEX IF NOT EXISTS idx_dispatch_time ON dispatch_history(dispatched_at);
             CREATE INDEX IF NOT EXISTS idx_entities_type ON line_entities(entity_type);
             CREATE INDEX IF NOT EXISTS idx_entities_last_message ON line_entities(last_message_at);
-            "#,
+            ",
         )?;
         Ok(())
     }
@@ -91,7 +91,7 @@ impl RmsStorage {
 
         if let Some(search) = &filter.search {
             sql.push_str(" AND display_name LIKE ?");
-            params.push(Box::new(format!("%{}%", search)));
+            params.push(Box::new(format!("%{search}%")));
         }
 
         // Handle has_relationship filter with subquery
@@ -106,14 +106,14 @@ impl RmsStorage {
         sql.push_str(" ORDER BY last_message_at DESC NULLS LAST, created_at DESC");
 
         if let Some(limit) = filter.limit {
-            sql.push_str(&format!(" LIMIT {}", limit));
+            sql.push_str(&format!(" LIMIT {limit}"));
         }
 
         if let Some(offset) = filter.offset {
-            sql.push_str(&format!(" OFFSET {}", offset));
+            sql.push_str(&format!(" OFFSET {offset}"));
         }
 
-        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(AsRef::as_ref).collect();
 
         let mut stmt = conn.prepare(&sql)?;
         let entities = stmt
@@ -166,14 +166,14 @@ impl RmsStorage {
     pub fn upsert_entity(&self, entity: &LineEntity) -> Result<(), StorageError> {
         let conn = self.conn.lock();
         conn.execute(
-            r#"INSERT INTO line_entities (id, entity_type, display_name, picture_url, last_message_at, created_at, updated_at)
+            r"INSERT INTO line_entities (id, entity_type, display_name, picture_url, last_message_at, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    entity_type = excluded.entity_type,
                    display_name = COALESCE(excluded.display_name, display_name),
                    picture_url = COALESCE(excluded.picture_url, picture_url),
                    last_message_at = COALESCE(excluded.last_message_at, last_message_at),
-                   updated_at = excluded.updated_at"#,
+                   updated_at = excluded.updated_at",
             rusqlite::params![
                 entity.id,
                 entity.entity_type.as_str(),
@@ -278,13 +278,13 @@ impl RmsStorage {
 
         let conn = self.conn.lock();
         conn.execute(
-            r#"INSERT INTO relationships (line_entity_id, entity_type, client_id, priority, is_manual, created_at, updated_at, notes)
+            r"INSERT INTO relationships (line_entity_id, entity_type, client_id, priority, is_manual, created_at, updated_at, notes)
                VALUES (?, ?, ?, 0, ?, ?, ?, ?)
                ON CONFLICT(line_entity_id) DO UPDATE SET
                    client_id = excluded.client_id,
                    is_manual = excluded.is_manual,
                    updated_at = excluded.updated_at,
-                   notes = COALESCE(excluded.notes, notes)"#,
+                   notes = COALESCE(excluded.notes, notes)",
             rusqlite::params![
                 entity_id,
                 entity_type.as_str(),

@@ -52,16 +52,15 @@ impl SqliteBackend {
 
     /// Create from DataConfig
     pub fn from_config(config: &DataConfig) -> Result<Self, DbError> {
-        let path = match &config.path {
-            Some(p) => p.clone(),
-            None => {
-                let base = dirs::data_local_dir()
-                    .or_else(dirs::home_dir)
-                    .unwrap_or_else(|| Path::new(".").to_path_buf());
-                base.join(".ugent")
-                    .join("line-plugin")
-                    .join("line-proxy.db")
-            }
+        let path = if let Some(p) = &config.path {
+            p.clone()
+        } else {
+            let base = dirs::data_local_dir()
+                .or_else(dirs::home_dir)
+                .unwrap_or_else(|| Path::new(".").to_path_buf());
+            base.join(".ugent")
+                .join("line-plugin")
+                .join("line-proxy.db")
         };
 
         if let Some(parent) = path.parent() {
@@ -96,7 +95,7 @@ impl SqliteBackend {
 
         // Run legacy v1 tables if needed (backward compat)
         if version < 1 {
-            self.run_v1_schema(&conn)?;
+            Self::run_v1_schema(&conn)?;
         }
 
         // Run v2 tables if needed
@@ -111,7 +110,7 @@ impl SqliteBackend {
     }
 
     /// Create v1 legacy tables (for backward compatibility with existing installs)
-    fn run_v1_schema(&self, conn: &rusqlite::Connection) -> Result<(), DbError> {
+    fn run_v1_schema(conn: &rusqlite::Connection) -> Result<(), DbError> {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS conversation_ownership (
                 conversation_id TEXT PRIMARY KEY,
@@ -625,7 +624,7 @@ impl DatabaseBackend for SqliteBackend {
         limit: u64,
     ) -> Result<Vec<MessageRecord>, DbError> {
         let conv_id = conversation_id.to_string();
-        let dir = direction.map(|d| d.to_string());
+        let dir = direction.map(std::string::ToString::to_string);
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
@@ -684,7 +683,7 @@ impl DatabaseBackend for SqliteBackend {
         error: Option<&str>,
     ) -> Result<(), DbError> {
         let msg_id = id.to_string();
-        let err_msg = error.map(|e| e.to_string());
+        let err_msg = error.map(std::string::ToString::to_string);
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
@@ -823,7 +822,7 @@ impl DatabaseBackend for SqliteBackend {
         error: Option<&str>,
     ) -> Result<(), DbError> {
         let eid = id.to_string();
-        let err_msg = error.map(|e| e.to_string());
+        let err_msg = error.map(std::string::ToString::to_string);
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
@@ -1086,8 +1085,8 @@ impl DatabaseBackend for SqliteBackend {
         conversation_id: &str,
         client_id: &str,
     ) -> Result<(), DbError> {
-        let cid = conversation_id.to_string();
-        let clid = client_id.to_string();
+        let conv_id = conversation_id.to_string();
+        let client = client_id.to_string();
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
@@ -1099,7 +1098,7 @@ impl DatabaseBackend for SqliteBackend {
                      client_id = excluded.client_id,
                      claimed_at = excluded.claimed_at,
                      last_heartbeat = excluded.last_heartbeat",
-                rusqlite::params![cid, clid, now],
+                rusqlite::params![conv_id, client, now],
             )
             .map_err(|e| DbError::Query(e.to_string()))?;
             Ok(())
@@ -1112,14 +1111,14 @@ impl DatabaseBackend for SqliteBackend {
         &self,
         conversation_id: &str,
     ) -> Result<Option<String>, DbError> {
-        let cid = conversation_id.to_string();
+        let conv_id = conversation_id.to_string();
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
             let result = conn
                 .query_row(
                     "SELECT client_id FROM conversation_ownership WHERE conversation_id = ?1",
-                    rusqlite::params![cid],
+                    rusqlite::params![conv_id],
                     |row| row.get::<_, String>(0),
                 )
                 .ok();
@@ -1130,14 +1129,14 @@ impl DatabaseBackend for SqliteBackend {
     }
 
     async fn release_client_conversations(&self, client_id: &str) -> Result<u64, DbError> {
-        let clid = client_id.to_string();
+        let client = client_id.to_string();
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
             let deleted = conn
                 .execute(
                     "DELETE FROM conversation_ownership WHERE client_id = ?1",
-                    rusqlite::params![clid],
+                    rusqlite::params![client],
                 )
                 .map_err(|e| DbError::Query(e.to_string()))?;
             Ok(deleted as u64)
