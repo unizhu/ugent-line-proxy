@@ -21,7 +21,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -56,7 +56,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -64,7 +64,7 @@ jobs:
           targets: x86_64-unknown-linux-gnu
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -87,14 +87,14 @@ jobs:
         run: cargo deb --target x86_64-unknown-linux-gnu --output target/debian/ugent-line-proxy_amd64.deb
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ugent-line-proxy-linux-amd64
           path: target/x86_64-unknown-linux-gnu/release/ugent-line-proxy
           retention-days: 30
 
       - name: Upload deb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ugent-line-proxy_amd64-deb
           path: target/debian/ugent-line-proxy_amd64.deb
@@ -107,7 +107,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -120,7 +120,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -144,14 +144,14 @@ jobs:
           cargo deb --target aarch64-unknown-linux-gnu --output target/debian/ugent-line-proxy_aarch64.deb
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ugent-line-proxy-linux-aarch64
           path: target/aarch64-unknown-linux-gnu/release/ugent-line-proxy
           retention-days: 30
 
       - name: Upload deb artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ugent-line-proxy_aarch64-deb
           path: target/debian/ugent-line-proxy_aarch64.deb
@@ -166,28 +166,28 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download AMD64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ugent-line-proxy-linux-amd64
           path: artifacts/
 
       - name: Download AMD64 deb
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ugent-line-proxy_amd64-deb
           path: artifacts/
 
       - name: Download AARCH64 binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ugent-line-proxy-linux-aarch64
           path: artifacts/
 
       - name: Download AARCH64 deb
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ugent-line-proxy_aarch64-deb
           path: artifacts/
@@ -196,7 +196,7 @@ jobs:
         run: ls -la artifacts/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v2.6
         with:
           tag_name: v${{ needs.check-trigger.outputs.version }}
           name: Release v${{ needs.check-trigger.outputs.version }}
