@@ -177,7 +177,6 @@ impl OutboundRetryWorker {
     /// Process a single outbound queue entry with retry
     async fn process_entry(&self, entry: &OutboundQueueEntry) -> Result<(), String> {
         let backend = self.database.backend();
-        let _wid = worker_id();
 
         // Fetch the stored message
         let message = backend

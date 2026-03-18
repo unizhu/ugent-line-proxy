@@ -344,7 +344,12 @@ impl DatabaseBackend for SqliteBackend {
         query: &str,
         limit: u64,
     ) -> Result<Vec<ContactRecord>, DbError> {
-        let query = format!("%{query}%");
+        // Escape LIKE wildcards to prevent LIKE injection
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let query = format!("%{escaped}%");
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
@@ -353,7 +358,7 @@ impl DatabaseBackend for SqliteBackend {
                     "SELECT line_user_id, display_name, picture_url, status_message, language,
                             first_seen_at, last_seen_at, last_interacted_at, is_blocked, is_friend,
                             created_at, updated_at
-                     FROM contacts WHERE display_name LIKE ?1 ORDER BY last_seen_at DESC LIMIT ?2",
+                     FROM contacts WHERE display_name LIKE ?1 ESCAPE '\\' ORDER BY last_seen_at DESC LIMIT ?2",
                 )
                 .map_err(|e| DbError::Query(e.to_string()))?;
 
@@ -1042,27 +1047,15 @@ impl DatabaseBackend for SqliteBackend {
             let conn = conn.lock();
             let now = Self::now_ms();
 
-            // Check if already exists
-            let exists: bool = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM webhook_dedup WHERE event_id = ?1",
-                    rusqlite::params![eid],
-                    |row| row.get::<_, i64>(0),
+            // Try INSERT OR IGNORE (atomic check-and-mark)
+            let inserted = conn
+                .execute(
+                    "INSERT OR IGNORE INTO webhook_dedup (event_id, processed_at) VALUES (?1, ?2)",
+                    rusqlite::params![eid, now],
                 )
-                .map(|c| c > 0)
-                .unwrap_or(false);
+                .map_err(|e| DbError::Query(e.to_string()))?;
 
-            if exists {
-                return Ok(true); // already processed
-            }
-
-            conn.execute(
-                "INSERT INTO webhook_dedup (event_id, processed_at) VALUES (?1, ?2)",
-                rusqlite::params![eid, now],
-            )
-            .map_err(|e| DbError::Query(e.to_string()))?;
-
-            Ok(false) // not previously processed
+            Ok(inserted == 0) // 0 rows inserted means already existed
         })
         .await
         .map_err(|e| DbError::Connection(e.to_string()))?

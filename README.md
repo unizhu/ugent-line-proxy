@@ -17,6 +17,9 @@ LINE Platform → ugent-line-proxy (Public VPS) → WebSocket → UGENT (Local)
 - @mention detection in groups
 - Media content download proxy
 - Outbound artifact (file/image) sending
+- Data retention with SQLite/PostgreSQL backends
+- Message retry with exponential backoff (inbound & outbound)
+- Contact and group profile storage
 
 ## Configuration
 
@@ -32,6 +35,34 @@ LINE Platform → ugent-line-proxy (Public VPS) → WebSocket → UGENT (Local)
 | `LINE_PROXY_WS_PATH` | No | `/ws` | WebSocket endpoint path |
 | `LINE_PROXY_LOG_LEVEL` | No | `info` | Log level (trace/debug/info/warn/error) |
 | `LINE_PROXY_LOG_FORMAT` | No | `json` | Log format (json/pretty) |
+
+### Data Retention & Database (Optional)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LINE_PROXY_STORAGE_ENABLED` | No | `false` | Enable persistent storage |
+| `LINE_PROXY_STORAGE_PATH` | No | `~/.ugent/line-plugin/line-proxy.db` | SQLite database file path |
+| `LINE_PROXY_DB_TYPE` | No | `sqlite` | Database backend: `sqlite` or `postgres` |
+| `LINE_PROXY_DB_URL` | No | - | PostgreSQL connection URL (required if `postgres`) |
+
+### Data Retention Flags (Optional)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LINE_PROXY_RETENTION_ENABLED` | No | `false` | Enable data retention (contacts, messages, groups) |
+| `LINE_PROXY_RETENTION_CONTACTS` | No | `true` | Store contact data (when retention enabled) |
+| `LINE_PROXY_RETENTION_MESSAGES` | No | `true` | Store message data (when retention enabled) |
+| `LINE_PROXY_RETENTION_GROUPS` | No | `true` | Store group data (when retention enabled) |
+
+### Retry Configuration (Optional)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LINE_PROXY_RETRY_ENABLED` | No | `true` | Enable retry logic for message delivery |
+| `LINE_PROXY_RETRY_MAX_ATTEMPTS` | No | `5` | Max retry attempts for outbound messages |
+| `LINE_PROXY_RETRY_INITIAL_DELAY_MS` | No | `1000` | Initial retry backoff delay (ms) |
+| `LINE_PROXY_RETRY_MAX_DELAY_MS` | No | `60000` | Max retry backoff delay (ms) |
+| `LINE_PROXY_INBOUND_QUEUE_TTL_SECS` | No | `3600` | TTL for undelivered inbound messages (secs) |
 
 ### TLS Configuration (Optional)
 
