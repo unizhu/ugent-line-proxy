@@ -9,17 +9,20 @@
 //! - Sending ResponseResult acknowledgments
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::config::Config;
+use crate::file_hosting::FileHostingService;
 use crate::line_api::{self, LineApiClient, artifact_to_message, build_text_message};
 use crate::storage::{
     METRIC_MESSAGES_RECEIVED, METRIC_MESSAGES_SENT, METRIC_PENDING_MESSAGES,
     METRIC_RESPONSES_RECEIVED, Storage,
 };
+use crate::types::ArtifactKind;
 use crate::types::{Capabilities, OutboundArtifact, PendingMessage, ProxyMessage, WsProtocol};
 use crate::ws_manager::{SendError, WebSocketManager};
 
@@ -42,6 +45,8 @@ pub struct MessageBroker {
     pending_messages: RwLock<HashMap<String, PendingMessage>>,
     /// Persistent storage (optional)
     storage: Option<Arc<Storage>>,
+    /// File hosting service (optional)
+    file_hosting: RwLock<Option<Arc<FileHostingService>>>,
 }
 
 impl MessageBroker {
@@ -55,6 +60,7 @@ impl MessageBroker {
             line_client,
             pending_messages: RwLock::new(HashMap::new()),
             storage: None,
+            file_hosting: RwLock::new(None),
         }
     }
 
@@ -72,6 +78,7 @@ impl MessageBroker {
             line_client,
             pending_messages: RwLock::new(HashMap::new()),
             storage: Some(Arc::new(storage)),
+            file_hosting: RwLock::new(None),
         }
     }
 
@@ -88,6 +95,17 @@ impl MessageBroker {
     /// Get storage reference (if enabled)
     pub fn storage(&self) -> Option<&Storage> {
         self.storage.as_deref()
+    }
+
+    /// Set the file hosting service (called from main.rs after initialization)
+    pub fn set_file_hosting(&self, service: Arc<FileHostingService>) {
+        let mut fh = self.file_hosting.write();
+        *fh = Some(service);
+    }
+
+    /// Get a clone of the file hosting service Arc (if enabled)
+    pub fn get_file_hosting(&self) -> Option<Arc<FileHostingService>> {
+        self.file_hosting.read().clone()
     }
 
     /// Route a message to the appropriate UGENT client.
@@ -430,6 +448,16 @@ impl MessageBroker {
             conversation_id, artifact.name, artifact.kind
         );
 
+        // For Document/Other artifacts with local_path, use file hosting if available
+        if matches!(artifact.kind, ArtifactKind::Document | ArtifactKind::Other)
+            && artifact.local_path.is_some()
+            && let Some(fh) = self.get_file_hosting()
+        {
+            return self
+                .send_file_via_hosting(&fh, conversation_id, reply_token, artifact)
+                .await;
+        }
+
         // Try to convert artifact to LINE message
         if let Some(message) = artifact_to_message(artifact) {
             // Use reply token if available and not expired
@@ -465,6 +493,79 @@ impl MessageBroker {
             );
             return Err(BrokerError::UnsupportedArtifactType);
         }
+
+        Ok(())
+    }
+
+    /// Send a file via the file hosting service.
+    /// Saves the local file, generates a signed download URL, and sends it as text.
+    async fn send_file_via_hosting(
+        &self,
+        fh: &crate::file_hosting::FileHostingService,
+        conversation_id: &str,
+        reply_token: Option<&str>,
+        artifact: &OutboundArtifact,
+    ) -> Result<(), BrokerError> {
+        let local_path = artifact
+            .local_path
+            .as_deref()
+            .ok_or(BrokerError::UnsupportedArtifactType)?;
+
+        let path = Path::new(local_path);
+        if !path.exists() {
+            error!("Local file not found for hosting: {}", local_path);
+            return Err(BrokerError::LineApi(format!(
+                "Local file not found: {local_path}"
+            )));
+        }
+
+        // Save file to hosting directory
+        let saved = fh
+            .save_file(path, Some(&artifact.name), artifact.content_type.as_deref())
+            .await
+            .map_err(|e| BrokerError::LineApi(format!("File hosting save error: {e}")))?;
+
+        let download_url = fh.generate_download_url(&saved.uuid_name, None);
+
+        info!(
+            "File hosted: {} -> {}",
+            artifact.name,
+            &download_url[..download_url.len().min(80)]
+        );
+
+        let size_info = artifact
+            .size_bytes
+            .map(|s| format!(" ({:.1} KB)", s as f64 / 1024.0))
+            .unwrap_or_default();
+
+        let text = format!("\u{1f4ce} {}{size_info}\n{download_url}", artifact.name);
+
+        let message = build_text_message(&text);
+
+        // Send via reply or push
+        if let Some(token) = reply_token {
+            match self
+                .line_client
+                .reply_message(token, vec![message.clone()])
+                .await
+            {
+                Ok(()) => {
+                    info!("Hosted file sent via reply");
+                    return Ok(());
+                }
+                Err(line_api::LineApiError::InvalidReplyToken) => {
+                    warn!("Reply token expired, falling back to push");
+                }
+                Err(e) => {
+                    return Err(BrokerError::LineApi(e.to_string()));
+                }
+            }
+        }
+
+        self.line_client
+            .push_message(conversation_id, vec![message])
+            .await?;
+        info!("Hosted file sent via push");
 
         Ok(())
     }
@@ -580,6 +681,39 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
 // Unit Tests
 // =============================================================================
 
+/// Axum handler for file download — extracts file hosting service from broker state.
+pub async fn handle_file_download(
+    axum::extract::State(broker): axum::extract::State<Arc<MessageBroker>>,
+    axum::extract::Query(params): axum::extract::Query<crate::file_hosting::DownloadParams>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let fh = match broker.get_file_hosting() {
+        Some(s) => s,
+        None => {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "File hosting not configured",
+            )
+                .into_response();
+        }
+    };
+
+    let expires = match params.expires {
+        Some(e) => e,
+        None => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                "Missing expires parameter",
+            )
+                .into_response();
+        }
+    };
+
+    crate::file_hosting::serve_download(&fh, &params.file, &params.code, expires).await
+}
+
+// =============================================================================
 #[cfg(test)]
 mod tests {
     use super::*;

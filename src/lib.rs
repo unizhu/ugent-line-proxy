@@ -39,6 +39,7 @@ pub mod broker;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod file_hosting;
 pub mod line_api;
 pub mod retry;
 pub mod rms;

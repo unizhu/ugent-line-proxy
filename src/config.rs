@@ -39,6 +39,9 @@ pub struct Config {
     /// Storage configuration
     #[serde(default)]
     pub storage: StorageConfig,
+    /// File hosting configuration
+    #[serde(default)]
+    pub file_hosting: FileHostingConfig,
 }
 
 impl Config {
@@ -50,6 +53,7 @@ impl Config {
         let media = MediaConfig::from_env();
         let logging = LoggingConfig::from_env();
         let storage = StorageConfig::from_env();
+        let file_hosting = FileHostingConfig::from_env();
 
         Ok(Self {
             server,
@@ -58,6 +62,7 @@ impl Config {
             media,
             logging,
             storage,
+            file_hosting,
         })
     }
 
@@ -375,6 +380,86 @@ impl LoggingConfig {
             format,
             file,
         }
+    }
+}
+
+// =============================================================================
+// File Hosting Configuration
+// =============================================================================
+
+/// File hosting configuration for serving artifacts as downloadable files.
+///
+/// Enables the proxy to save local files and serve them via signed URLs
+/// with HMAC-based authentication and TTL-based expiry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileHostingConfig {
+    /// Enable file hosting service
+    pub enabled: bool,
+    /// Public domain for download URLs (e.g., "https://line-files.example.com")
+    /// If empty, file hosting is effectively disabled even if enabled=true
+    pub domain: String,
+    /// Local filesystem path for storing hosted files
+    #[serde(default = "default_file_hosting_path")]
+    pub storage_path: PathBuf,
+    /// Time-to-live for download links in minutes
+    #[serde(default = "default_file_hosting_ttl")]
+    pub ttl_mins: u64,
+    /// HMAC signing key for generating secure download codes
+    /// Must be at least 16 bytes (32 hex chars)
+    pub encryption_key: String,
+}
+
+fn default_file_hosting_path() -> PathBuf {
+    PathBuf::from("/var/lib/ugent-line-proxy/files")
+}
+
+fn default_file_hosting_ttl() -> u64 {
+    60 // 60 minutes
+}
+
+impl Default for FileHostingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            domain: String::new(),
+            storage_path: default_file_hosting_path(),
+            ttl_mins: default_file_hosting_ttl(),
+            encryption_key: String::new(),
+        }
+    }
+}
+
+impl FileHostingConfig {
+    fn from_env() -> Self {
+        let enabled = std::env::var("LINE_FILE_HOSTING_ENABLED")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        let domain = std::env::var("LINE_FILE_HOSTING_DOMAIN").unwrap_or_default();
+
+        let storage_path = std::env::var("LINE_FILE_HOSTING_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_file_hosting_path());
+
+        let ttl_mins = std::env::var("LINE_FILE_HOSTING_TTL_MINS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(default_file_hosting_ttl);
+
+        let encryption_key = std::env::var("LINE_FILE_HOSTING_ENCRYPTION_KEY").unwrap_or_default();
+
+        Self {
+            enabled,
+            domain,
+            storage_path,
+            ttl_mins,
+            encryption_key,
+        }
+    }
+
+    /// Check if file hosting is properly configured and ready to use
+    pub fn is_configured(&self) -> bool {
+        self.enabled && !self.domain.is_empty() && self.encryption_key.len() >= 16
     }
 }
 

@@ -12,18 +12,17 @@ use axum::{
     routing::{get, post},
 };
 use tower_http::cors::{Any, CorsLayer};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use ugent_line_proxy::{
-    broker::MessageBroker,
+    broker::{MessageBroker, handle_file_download},
     config::Config,
-    handle_webhook,
+    file_hosting, handle_webhook,
     rms::{RelationshipManagerService, rms_routes},
     storage::Storage,
     ws_manager::WebSocketManager,
 };
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Load .env file if present
@@ -99,6 +98,50 @@ async fn main() -> anyhow::Result<()> {
         .route(&config.line.webhook_path, post(handle_webhook))
         // WebSocket endpoint
         .route(&config.websocket.path, get(websocket_handler));
+
+    // Add file hosting routes if configured
+    if config.file_hosting.is_configured() {
+        let fh_service = Arc::new(file_hosting::FileHostingService::new(
+            config.file_hosting.storage_path.clone(),
+            config.file_hosting.domain.clone(),
+            config.file_hosting.ttl_mins,
+            &config.file_hosting.encryption_key,
+        ));
+
+        // Initialize storage directory
+        if let Err(e) = fh_service.init_storage().await {
+            error!("Failed to initialize file hosting storage: {e}");
+        } else {
+            info!(
+                "File hosting enabled: domain={}, path={:?}, ttl={}min",
+                config.file_hosting.domain,
+                config.file_hosting.storage_path,
+                config.file_hosting.ttl_mins
+            );
+
+            // Start background cleanup task
+            let cleanup_service = fh_service.clone();
+            let cleanup_interval = config.file_hosting.ttl_mins.max(10);
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(cleanup_interval * 60));
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = cleanup_service.cleanup_expired().await {
+                        tracing::warn!("File hosting cleanup error: {e}");
+                    }
+                }
+            });
+
+            app = app.route("/download", get(handle_file_download));
+            // Store file hosting service in broker for artifact handling
+            broker.set_file_hosting(fh_service);
+        }
+    } else if config.file_hosting.enabled {
+        warn!(
+            "File hosting enabled but not fully configured. Set LINE_FILE_HOSTING_DOMAIN and LINE_FILE_HOSTING_ENCRYPTION_KEY (>= 16 chars)"
+        );
+    }
 
     // Add RMS routes if storage is available
     if let Some(storage) = storage_arc {

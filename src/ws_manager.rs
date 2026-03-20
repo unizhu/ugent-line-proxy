@@ -737,6 +737,7 @@ mod tests {
             media: crate::config::MediaConfig::default(),
             logging: crate::config::LoggingConfig::default(),
             storage: crate::config::StorageConfig::default(),
+            file_hosting: crate::config::FileHostingConfig::default(),
         })
     }
 
