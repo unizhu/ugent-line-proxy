@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use base64::Engine;
 use parking_lot::RwLock;
 use tracing::{debug, error, info, warn};
 
@@ -498,7 +499,7 @@ impl MessageBroker {
     }
 
     /// Send a file via the file hosting service.
-    /// Saves the local file, generates a signed download URL, and sends it as text.
+    /// Saves the file (from base64 data or local path), generates a signed download URL, and sends it as text.
     async fn send_file_via_hosting(
         &self,
         fh: &crate::file_hosting::FileHostingService,
@@ -506,24 +507,31 @@ impl MessageBroker {
         reply_token: Option<&str>,
         artifact: &OutboundArtifact,
     ) -> Result<(), BrokerError> {
-        let local_path = artifact
-            .local_path
-            .as_deref()
-            .ok_or(BrokerError::UnsupportedArtifactType)?;
-
-        let path = Path::new(local_path);
-        if !path.exists() {
-            error!("Local file not found for hosting: {}", local_path);
-            return Err(BrokerError::LineApi(format!(
-                "Local file not found: {local_path}"
-            )));
-        }
-
-        // Save file to hosting directory
-        let saved = fh
-            .save_file(path, Some(&artifact.name), artifact.content_type.as_deref())
-            .await
-            .map_err(|e| BrokerError::LineApi(format!("File hosting save error: {e}")))?;
+        let saved = if let Some(ref b64_data) = artifact.data {
+            // Cross-machine delivery: decode base64 data
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64_data)
+                .map_err(|e| BrokerError::LineApi(format!("Base64 decode error: {e}")))?;
+            fh.save_bytes(&bytes, &artifact.name, artifact.content_type.as_deref().unwrap_or("application/octet-stream"))
+                .await
+                .map_err(|e| BrokerError::LineApi(format!("File hosting save error: {e}")))?
+        } else if let Some(ref local_path) = artifact.local_path {
+            // Same-machine fallback: read from local filesystem
+            let path = Path::new(local_path);
+            if !path.exists() {
+                error!("Local file not found for hosting: {}", local_path);
+                return Err(BrokerError::LineApi(format!(
+                    "Local file not found: {local_path}"
+                )));
+            }
+            fh.save_file(path, Some(&artifact.name), artifact.content_type.as_deref())
+                .await
+                .map_err(|e| BrokerError::LineApi(format!("File hosting save error: {e}")))?
+        } else {
+            return Err(BrokerError::LineApi(
+                "No file data or local_path in artifact".to_string(),
+            ));
+        };
 
         let download_url = fh.generate_download_url(&saved.uuid_name, None);
 
