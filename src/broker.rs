@@ -253,10 +253,7 @@ impl MessageBroker {
             if let Some(msg) = artifact_to_message(artifact) {
                 messages.push(msg);
             } else {
-                warn!(
-                    "Artifact {} cannot be sent directly to LINE",
-                    artifact.file_name
-                );
+                warn!("Artifact {} cannot be sent directly to LINE", artifact.name);
             }
         }
 
@@ -430,7 +427,7 @@ impl MessageBroker {
     ) -> Result<(), BrokerError> {
         debug!(
             "Sending artifact: conversation={}, file={}, kind={:?}",
-            conversation_id, artifact.file_name, artifact.kind
+            conversation_id, artifact.name, artifact.kind
         );
 
         // Try to convert artifact to LINE message
@@ -464,7 +461,7 @@ impl MessageBroker {
             // Can't send this artifact type directly
             error!(
                 "Failed to send artifact {}: cannot convert to LINE message",
-                artifact.file_name
+                artifact.name
             );
             return Err(BrokerError::UnsupportedArtifactType);
         }

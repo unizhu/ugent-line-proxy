@@ -1113,32 +1113,48 @@ pub enum WsProtocol {
     /// Pong from server
     Pong,
     /// Error message
-    Error { code: i32, message: String },
+    Error { code: u32, message: String },
 }
 
 /// Outbound artifact (file/image to send)
+/// Matches ugent_plugin_api::OutboundArtifact for wire compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundArtifact {
     /// File name
-    pub file_name: String,
-    /// Content type (mime type)
-    pub content_type: String,
+    pub name: String,
     /// Artifact type
     pub kind: ArtifactKind,
-    /// File data (base64 encoded for WebSocket transport)
-    pub data: String,
+    /// Content type (mime type)
+    pub content_type: Option<String>,
+    /// Base64 encoded file data (preferred for cross-machine delivery)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
     /// Local file path (if available)
     pub local_path: Option<String>,
+    /// Public URL for the artifact
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Caption text
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// File size in bytes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Optional JSON metadata (e.g., duration_ms for audio, width/height for images)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// Artifact kind
+/// Matches ugent_plugin_api::InboundAttachmentKind for wire compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ArtifactKind {
     Image,
     Audio,
     Video,
-    File,
+    Document,
+    Other,
 }
 
 // =============================================================================

@@ -633,42 +633,89 @@ pub fn build_location_message(title: &str, address: &str, latitude: f64, longitu
 pub fn artifact_to_message(artifact: &OutboundArtifact) -> Option<Value> {
     match artifact.kind {
         ArtifactKind::Image => {
-            // For images, we need to upload to a public URL first
-            // This is a limitation - LINE requires public URLs for media
-            // The UGENT side should handle this by providing public URLs
-            if let Some(url) = &artifact.local_path {
-                // Assume it's a URL if it starts with http
-                if url.starts_with("http://") || url.starts_with("https://") {
-                    return Some(build_image_message(url, url));
-                }
-            }
-            None
+            // For images, check URL first, then local_path
+            let url = artifact
+                .url
+                .as_ref()
+                .and_then(|u| {
+                    if u.starts_with("http://") || u.starts_with("https://") {
+                        Some(u.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    artifact.local_path.as_ref().and_then(|p| {
+                        if p.starts_with("http://") || p.starts_with("https://") {
+                            Some(p.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                });
+            url.map(|u| build_image_message(u, u))
         }
         ArtifactKind::Audio => {
-            // Similar limitation for audio
-            if let Some(url) = &artifact.local_path
-                && (url.starts_with("http://") || url.starts_with("https://"))
-            {
-                // Duration is unknown, estimate from base64 size
-                return Some(build_audio_message(url, 60000));
-            }
-            None
+            let url = artifact
+                .url
+                .as_ref()
+                .and_then(|u| {
+                    if u.starts_with("http://") || u.starts_with("https://") {
+                        Some(u.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    artifact.local_path.as_ref().and_then(|p| {
+                        if p.starts_with("http://") || p.starts_with("https://") {
+                            Some(p.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                });
+            // Extract duration from metadata if available, else estimate
+            let duration_ms = artifact
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("duration_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(60_000);
+            url.map(|u| build_audio_message(u, duration_ms as i64))
         }
         ArtifactKind::Video => {
-            if let Some(url) = &artifact.local_path
-                && (url.starts_with("http://") || url.starts_with("https://"))
-            {
-                return Some(build_video_message(url, url));
-            }
-            None
+            let url = artifact
+                .url
+                .as_ref()
+                .and_then(|u| {
+                    if u.starts_with("http://") || u.starts_with("https://") {
+                        Some(u.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    artifact.local_path.as_ref().and_then(|p| {
+                        if p.starts_with("http://") || p.starts_with("https://") {
+                            Some(p.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                });
+            url.map(|u| build_video_message(u, u))
         }
-        ArtifactKind::File => {
+        ArtifactKind::Document | ArtifactKind::Other => {
             // LINE doesn't support sending files directly
-            // We should send a text message with the file info instead
+            // Send a text message with the file info instead
+            let size_info = artifact
+                .size_bytes
+                .map(|s| format!(" ({:.1} KB)", s as f64 / 1024.0))
+                .unwrap_or_default();
             Some(build_text_message(&format!(
-                "📄 File: {} ({:.1} KB)",
-                artifact.file_name,
-                artifact.data.len() as f64 / 1024.0
+                "\u{1f4c4} File: {}{size_info}",
+                artifact.name
             )))
         }
     }
