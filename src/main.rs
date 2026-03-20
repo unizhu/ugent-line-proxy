@@ -133,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             });
 
-            app = app.route("/download", get(handle_file_download));
+            app = app.route("/download/{code}/{file}", get(handle_file_download));
             // Store file hosting service in broker for artifact handling
             broker.set_file_hosting(fh_service);
         }

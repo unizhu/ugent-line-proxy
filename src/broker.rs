@@ -267,9 +267,25 @@ impl MessageBroker {
             }
         }
 
-        // Add artifacts
+        // Process artifacts - send file-hosted artifacts separately, collect LINE messages for others
         for artifact in &artifacts {
-            if let Some(msg) = artifact_to_message(artifact) {
+            // For Document/Other with file hosting available, send via hosting (generates download URL)
+            let has_file = artifact.data.is_some() || artifact.local_path.is_some();
+            if matches!(artifact.kind, ArtifactKind::Document | ArtifactKind::Other)
+                && has_file
+                && self.get_file_hosting().is_some()
+            {
+                if let Err(e) = self
+                    .send_artifact(&pending.conversation_id, pending.reply_token.as_deref(), artifact)
+                    .await
+                {
+                    error!("Failed to send artifact {} via file hosting: {}", artifact.name, e);
+                    // Fall back to text message
+                    if let Some(msg) = artifact_to_message(artifact) {
+                        messages.push(msg);
+                    }
+                }
+            } else if let Some(msg) = artifact_to_message(artifact) {
                 messages.push(msg);
             } else {
                 warn!("Artifact {} cannot be sent directly to LINE", artifact.name);
@@ -445,13 +461,15 @@ impl MessageBroker {
         artifact: &OutboundArtifact,
     ) -> Result<(), BrokerError> {
         debug!(
-            "Sending artifact: conversation={}, file={}, kind={:?}",
-            conversation_id, artifact.name, artifact.kind
+            "Sending artifact: conversation={}, file={}, kind={:?}, has_data={}, has_local_path={}, has_url={}",
+            conversation_id, artifact.name, artifact.kind,
+            artifact.data.is_some(), artifact.local_path.is_some(), artifact.url.is_some()
         );
 
-        // For Document/Other artifacts with local_path, use file hosting if available
+        // For Document/Other artifacts, use file hosting if data or local_path is available
+        let has_file = artifact.data.is_some() || artifact.local_path.is_some();
         if matches!(artifact.kind, ArtifactKind::Document | ArtifactKind::Other)
-            && artifact.local_path.is_some()
+            && has_file
             && let Some(fh) = self.get_file_hosting()
         {
             return self
@@ -692,7 +710,7 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
 /// Axum handler for file download — extracts file hosting service from broker state.
 pub async fn handle_file_download(
     axum::extract::State(broker): axum::extract::State<Arc<MessageBroker>>,
-    axum::extract::Query(params): axum::extract::Query<crate::file_hosting::DownloadParams>,
+    axum::extract::Path(params): axum::extract::Path<crate::file_hosting::DownloadParams>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
@@ -707,20 +725,8 @@ pub async fn handle_file_download(
         }
     };
 
-    let expires = match params.expires {
-        Some(e) => e,
-        None => {
-            return (
-                axum::http::StatusCode::BAD_REQUEST,
-                "Missing expires parameter",
-            )
-                .into_response();
-        }
-    };
-
-    crate::file_hosting::serve_download(&fh, &params.file, &params.code, expires).await
+    crate::file_hosting::serve_download(&fh, &params.file, &params.code).await
 }
-
 // =============================================================================
 #[cfg(test)]
 mod tests {

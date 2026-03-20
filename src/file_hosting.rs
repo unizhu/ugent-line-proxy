@@ -33,15 +33,13 @@ use tracing::{debug, error, info, warn};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Request parameters for the download endpoint.
+/// Path parameters for the download endpoint: /download/:code/:file
 #[derive(Debug, Deserialize)]
 pub struct DownloadParams {
-    /// UUID filename (without extension)
-    pub file: String,
-    /// HMAC-SHA256 signature code
+    /// Combined code containing base64url-encoded expires:hmac
     pub code: String,
-    /// Expiry timestamp (Unix seconds)
-    pub expires: Option<i64>,
+    /// UUID filename
+    pub file: String,
 }
 
 /// Metadata stored alongside each hosted file.
@@ -164,17 +162,13 @@ impl FileHostingService {
     /// Generate a signed download URL for a hosted file.
     pub fn generate_download_url(&self, uuid_name: &str, created_at: Option<i64>) -> String {
         let expires = self.calculate_expires(created_at);
-        let code = self.generate_code(uuid_name, expires);
+        let code = self.generate_signed_code(uuid_name, expires);
 
         format!(
-            "{}/download?file={}&code={}&expires={}",
+            "{}/download/{code}/{uuid_name}",
             self.domain.trim_end_matches('/'),
-            uuid_name,
-            code,
-            expires
         )
     }
-
     /// Calculate the expires timestamp based on creation time + TTL.
     fn calculate_expires(&self, created_at: Option<i64>) -> i64 {
         let now = SystemTime::now()
@@ -197,8 +191,38 @@ impl FileHostingService {
         hex_encode(result.into_bytes())
     }
 
-    /// Verify a download request's HMAC code and check expiry.
-    pub fn verify_request(&self, file: &str, code: &str, expires: i64) -> bool {
+    /// Generate a self-contained signed code that embeds the expires timestamp.
+    /// Format: base64url("{expires}:{hmac_hex}")
+    pub fn generate_signed_code(&self, file_id: &str, expires: i64) -> String {
+        let hmac = self.generate_code(file_id, expires);
+        let payload = format!("{expires}:{hmac}");
+        base64_url_encode(payload.as_bytes())
+    }
+
+    /// Parse a signed code into (expires, hmac_hex) components.
+    /// Returns None if the code is malformed.
+    fn parse_signed_code(code: &str) -> Option<(i64, String)> {
+        let decoded = base64_url_decode(code)?;
+        let text = String::from_utf8(decoded).ok()?;
+        let (expires_str, hmac_hex) = text.split_once(':')?;
+        let expires: i64 = expires_str.parse().ok()?;
+        if hmac_hex.is_empty() {
+            return None;
+        }
+        Some((expires, hmac_hex.to_string()))
+    }
+
+    /// Verify a self-contained signed code for a file download.
+    /// Extracts expires from the code, checks expiry, then verifies HMAC.
+    pub fn verify_signed_code(&self, file: &str, code: &str) -> bool {
+        let (expires, hmac_hex) = match Self::parse_signed_code(code) {
+            Some(v) => v,
+            None => {
+                warn!("Malformed signed code for file={}", file);
+                return false;
+            }
+        };
+
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -213,14 +237,15 @@ impl FileHostingService {
         }
 
         let expected = self.generate_code(file, expires);
-        let result = expected == code;
-
-        if !result {
+        if expected != hmac_hex {
             warn!("Invalid download code for file={}", file);
+            return false;
         }
 
-        result
+        true
     }
+
+
 
     /// Read a hosted file's content and metadata.
     pub async fn read_file(
@@ -326,9 +351,8 @@ pub async fn serve_download(
     service: &FileHostingService,
     file: &str,
     code: &str,
-    expires: i64,
 ) -> Response {
-    if !service.verify_request(file, code, expires) {
+    if !service.verify_signed_code(file, code) {
         return (StatusCode::FORBIDDEN, "Invalid or expired download link").into_response();
     }
 
@@ -405,6 +429,20 @@ fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
         write!(s, "{b:02x}").unwrap();
     }
     s
+}
+
+/// Base64url encode (no padding, URL-safe alphabet).
+fn base64_url_encode(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Base64url decode.
+fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(input)
+        .ok()
 }
 
 /// Guess MIME type from file extension.
@@ -509,32 +547,25 @@ mod tests {
 
         let url = service.generate_download_url(&saved.uuid_name, Some(meta.created_at));
 
-        assert!(url.starts_with("https://files.example.com/download?file="));
+        // URL should use path-based format: /download/{code}/{file}
+        assert!(url.starts_with("https://files.example.com/download/"));
+        assert!(!url.contains('?'), "URL should not contain query parameters");
         assert!(url.contains(&saved.uuid_name));
-        assert!(url.contains("&code="));
-        assert!(url.contains("&expires="));
 
-        // Parse URL params manually
-        let query_str = url.split('?').nth(1).unwrap();
-        let mut file_val = String::new();
-        let mut code_val = String::new();
-        let mut expires_val: i64 = 0;
-        for pair in query_str.split('&') {
-            let mut parts = pair.splitn(2, '=');
-            let key = parts.next().unwrap();
-            let value = parts.next().unwrap_or("");
-            match key {
-                "file" => file_val = value.to_string(),
-                "code" => code_val = value.to_string(),
-                "expires" => expires_val = value.parse().unwrap(),
-                _ => {}
-            }
-        }
+        // Parse the code from the URL
+        let url_path = url.split('?').next().unwrap();
+        let segments: Vec<&str> = url_path.split('/').collect();
+        // URL: https://files.example.com/download/{code}/{file}
+        let code = segments[segments.len() - 2];
+        let file = segments[segments.len() - 1];
 
-        assert!(service.verify_request(&file_val, &code_val, expires_val));
+        assert_eq!(file, saved.uuid_name);
+
+        // Verify the signed code
+        assert!(service.verify_signed_code(file, code));
 
         // Verify wrong code fails
-        assert!(!service.verify_request(&file_val, "wrong_code", expires_val));
+        assert!(!service.verify_signed_code(file, "wrong_code"));
     }
 
     #[tokio::test]
@@ -547,11 +578,11 @@ mod tests {
             "test_encryption_key_at_least_16_bytes",
         );
 
-        // Generate code with past expiry
+        // Generate signed code with past expiry
         let past_expires = 1_000_000_000i64; // Sep 2001
-        let code = service.generate_code("test-uuid", past_expires);
+        let code = service.generate_signed_code("test-uuid", past_expires);
 
-        assert!(!service.verify_request("test-uuid", &code, past_expires));
+        assert!(!service.verify_signed_code("test-uuid", &code));
     }
 
     #[tokio::test]
