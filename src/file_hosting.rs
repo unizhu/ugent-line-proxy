@@ -345,12 +345,293 @@ impl FileHostingService {
     }
 }
 
+/// Check if the request comes from LINE's in-app browser (InAppBrowser or LIFF browser).
+/// LINE app User-Agent contains "Line/" (e.g., "Safari Line/15.12.1" on iOS,
+/// "Line/15.12.1" on Android). LIFF browser additionally contains " LIFF" at the end.
+pub fn is_line_inapp_browser(user_agent: &str) -> bool {
+    let ua = user_agent.to_lowercase();
+    // LINE's built-in browser includes "line/" in the User-Agent string.
+    // We check case-insensitively to handle all platforms.
+    ua.contains("line/")
+}
+
+/// Determine if a file type can be rendered in an HTML viewer for LINE in-app browser.
+fn is_renderable_type(content_type: &str, original_name: &str) -> bool {
+    let ext = original_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+
+    matches!(
+        content_type,
+        "application/pdf"
+            | "text/plain"
+            | "text/markdown"
+            | "text/csv"
+            | "application/vnd.ms-excel"
+            | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    ) || matches!(ext.as_str(), "pdf" | "md" | "markdown" | "txt" | "csv" | "xls" | "xlsx")
+}
+
+/// Get the render mode based on file type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderMode {
+    /// Render as PDF using PDF.js
+    Pdf,
+    /// Render as Markdown/HTML using marked.js
+    Markdown,
+    /// Render as plain text
+    PlainText,
+    /// Render as spreadsheet using SheetJS
+    Spreadsheet,
+}
+
+fn detect_render_mode(content_type: &str, original_name: &str) -> Option<RenderMode> {
+    let ext = original_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+
+    let is_pdf = content_type == "application/pdf" || ext == "pdf";
+    let is_md = ext == "md" || ext == "markdown";
+    let is_plain = content_type.starts_with("text/plain") || ext == "txt";
+    let is_csv = content_type == "text/csv" || ext == "csv";
+    let is_xls = content_type == "application/vnd.ms-excel"
+        || content_type
+            == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        || ext == "xls"
+        || ext == "xlsx";
+
+    if is_pdf {
+        Some(RenderMode::Pdf)
+    } else if is_md {
+        Some(RenderMode::Markdown)
+    } else if is_plain {
+        Some(RenderMode::PlainText)
+    } else if is_csv || is_xls {
+        Some(RenderMode::Spreadsheet)
+    } else {
+        None
+    }
+}
+
+/// Generate an HTML page that renders the file content in-browser using JS libraries.
+/// The file content is embedded as base64 data URL so no additional server requests are needed.
+fn generate_render_html(content: &[u8], meta: &FileMeta, mode: RenderMode) -> String {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(content);
+    let data_url = format!("data:{};base64,{}", meta.content_type, b64);
+    let title = html_escape(&meta.original_name);
+
+    let (script_tag, render_js) = match mode {
+        RenderMode::Pdf => {
+            // PDF.js v5.5.207
+            let script = r#"<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.5.207/pdf.min.mjs" type="module"></script>"#;
+            let js = r#"
+                <script type="module">
+                    import * as pdfjsLib from 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.5.207/pdf.min.mjs';
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/5.5.207/pdf.worker.min.mjs';
+
+                    const DATA_URL = "__DATA_URL__";
+                    const TITLE = "__TITLE__";
+
+                    document.title = TITLE;
+
+                    const loadingTask = pdfjsLib.getDocument(DATA_URL);
+                    loadingTask.promise.then(async function(pdf) {
+                        const totalPages = pdf.numPages;
+                        document.getElementById('page-info').textContent =
+                            'Page 1 / ' + totalPages;
+                        document.getElementById('page-info').style.display = 'inline';
+
+                        let currentPage = 1;
+                        const canvas = document.getElementById('pdf-canvas');
+                        const ctx = canvas.getContext('2d');
+
+                        async function renderPage(num) {
+                            const page = await pdf.getPage(num);
+                            const scale = Math.min(
+                                (window.innerWidth - 20) / page.getViewport({ scale: 1 }).width,
+                                2.0
+                            );
+                            const viewport = page.getViewport({ scale });
+                            canvas.height = viewport.height;
+                            canvas.width = viewport.width;
+                            await page.render({ canvasContext: ctx, viewport }).promise;
+                            document.getElementById('page-info').textContent =
+                                'Page ' + num + ' / ' + totalPages;
+                        }
+
+                        renderPage(currentPage);
+
+                        document.getElementById('prev-btn').onclick = function() {
+                            if (currentPage > 1) { currentPage--; renderPage(currentPage); }
+                        };
+                        document.getElementById('next-btn').onclick = function() {
+                            if (currentPage < totalPages) { currentPage++; renderPage(currentPage); }
+                        };
+                    }).catch(function(err) {
+                        document.getElementById('error-msg').textContent = 'PDF load error: ' + err.message;
+                        document.getElementById('error-msg').style.display = 'block';
+                    });
+                </script>"#;
+            (script.to_string(), js.to_string())
+        }
+        RenderMode::Markdown => {
+            // marked v17.0.4
+            let script = r#"<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>"#;
+            let js = r#"
+                <script>
+                    fetch("__DATA_URL__")
+                        .then(r => r.text())
+                        .then(text => {
+                            document.getElementById('content').innerHTML = marked.parse(text);
+                            document.title = "__TITLE__";
+                        })
+                        .catch(err => {
+                            document.getElementById('error-msg').textContent = 'Load error: ' + err;
+                            document.getElementById('error-msg').style.display = 'block';
+                        });
+                </script>"#;
+            (script.to_string(), js.to_string())
+        }
+        RenderMode::PlainText => {
+            let script = "".to_string();
+            let js = r#"
+                <script>
+                    fetch("__DATA_URL__")
+                        .then(r => r.text())
+                        .then(text => {
+                            const el = document.getElementById('content');
+                            el.textContent = text;
+                            document.title = "__TITLE__";
+                        })
+                        .catch(err => {
+                            document.getElementById('error-msg').textContent = 'Load error: ' + err;
+                            document.getElementById('error-msg').style.display = 'block';
+                        });
+                </script>"#;
+            (script, js.to_string())
+        }
+        RenderMode::Spreadsheet => {
+            // SheetJS v0.20.3
+            let script = r#"<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>"#;
+            let js = r#"
+                <script>
+                    fetch("__DATA_URL__")
+                        .then(r => r.arrayBuffer())
+                        .then(data => {
+                            const workbook = XLSX.read(data, { type: 'array' });
+                            const firstSheet = workbook.SheetNames[0];
+                            const html = XLSX.utils.sheet_to_html(workbook.Sheets[firstSheet]);
+                            document.getElementById('content').innerHTML = html;
+                            document.title = "__TITLE__";
+                        })
+                        .catch(err => {
+                            document.getElementById('error-msg').textContent = 'Load error: ' + err;
+                            document.getElementById('error-msg').style.display = 'block';
+                        });
+                </script>"#;
+            (script.to_string(), js.to_string())
+        }
+    };
+
+    let render_js = render_js.replace("__DATA_URL__", &data_url).replace("__TITLE__", &title);
+
+    let toolbar_html = if mode == RenderMode::Pdf {
+        r#"
+        <div id="toolbar" style="display:flex;align-items:center;justify-content:center;gap:16px;padding:8px;background:#f5f5f5;border-bottom:1px solid #ddd;position:sticky;top:0;z-index:10">
+            <button id="prev-btn" style="padding:6px 14px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:14px">◀</button>
+            <span id="page-info" style="font-size:13px;color:#666;display:none"></span>
+            <button id="next-btn" style="padding:6px 14px;border:1px solid #ccc;border-radius:4px;background:#fff;cursor:pointer;font-size:14px">▶</button>
+        </div>"#
+    } else {
+        ""
+    };
+
+    let canvas_html = if mode == RenderMode::Pdf {
+        r#"<div style="text-align:center;padding:8px"><canvas id="pdf-canvas" style="max-width:100%"></canvas></div>"#
+    } else {
+        ""
+    };
+
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>{title}</title>
+{script_tag}
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#fff; color:#333; }}
+#content {{ padding:12px 16px; font-size:14px; line-height:1.7; word-wrap:break-word; overflow-wrap:break-word; }}
+#content table {{ border-collapse:collapse; width:100%; margin:12px 0; font-size:12px; }}
+#content th,#content td {{ border:1px solid #ddd; padding:6px 8px; text-align:left; }}
+#content th {{ background:#f5f5f5; font-weight:600; }}
+#content pre {{ background:#f5f5f5; padding:12px; border-radius:6px; overflow-x:auto; font-size:12px; margin:8px 0; }}
+#content code {{ background:#f0f0f0; padding:2px 5px; border-radius:3px; font-size:12px; }}
+#content pre code {{ background:none; padding:0; }}
+#content h1 {{ font-size:20px; margin:16px 0 8px; border-bottom:1px solid #eee; padding-bottom:6px; }}
+#content h2 {{ font-size:17px; margin:14px 0 6px; border-bottom:1px solid #eee; padding-bottom:4px; }}
+#content h3 {{ font-size:15px; margin:12px 0 4px; }}
+#content ul,#content ol {{ margin:6px 0; padding-left:22px; }}
+#content li {{ margin:3px 0; }}
+#content img {{ max-width:100%; height:auto; border-radius:4px; }}
+#content a {{ color:#0066cc; }}
+#error-msg {{ display:none; color:#e74c3c; padding:16px; text-align:center; font-size:14px; }}
+#loading {{ text-align:center; padding:40px; color:#999; font-size:14px; }}
+</style>
+</head>
+<body>
+{toolbar_html}
+<div id="loading">Loading...</div>
+{canvas_html}
+<div id="content"></div>
+<div id="error-msg"></div>
+{render_js}
+<script>
+document.getElementById('loading').style.display = 'none';
+</script>
+</body>
+</html>"#,
+        title = title,
+        script_tag = script_tag,
+        toolbar_html = toolbar_html,
+        canvas_html = canvas_html,
+        render_js = render_js,
+    )
+}
+
+/// Escape HTML special characters in a string.
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Serve a file download request given a file hosting service and params.
 /// This is the core logic; broker.rs provides the axum handler wrapper.
+///
+/// When `user_agent` is provided and matches LINE's in-app browser, and the file
+/// is a renderable type (PDF, Markdown, plain text, spreadsheet), this returns
+/// an HTML page that renders the content in-browser instead of a raw file download.
 pub async fn serve_download(
     service: &FileHostingService,
     file: &str,
     code: &str,
+    user_agent: Option<&str>,
 ) -> Response {
     if !service.verify_signed_code(file, code) {
         return (StatusCode::FORBIDDEN, "Invalid or expired download link").into_response();
@@ -363,10 +644,39 @@ pub async fn serve_download(
         }
         Err(e) => {
             error!("Error reading file {}: {}", file, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error",
+            )
+                .into_response();
         }
     };
 
+    // If this is LINE in-app browser and the file is renderable, return HTML viewer
+    if let Some(ua) = user_agent
+        && is_line_inapp_browser(ua) && is_renderable_type(&meta.content_type, &meta.original_name)
+            && let Some(mode) = detect_render_mode(&meta.content_type, &meta.original_name) {
+                info!(
+                    "Serving render view for LINE browser: file={}, type={}, mode={:?}",
+                    file, meta.original_name, mode
+                );
+                let html = generate_render_html(&content, &meta, mode);
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                    .header(header::CONTENT_SECURITY_POLICY, "default-src 'unsafe-inline' 'unsafe-eval' https: data: blob:; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' 'unsafe-eval' https:; img-src 'unsafe-inline' data: https:;")
+                    .body(Body::from(html))
+                    .unwrap_or_else(|_| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "Failed to build render response",
+                        )
+                            .into_response()
+                    });
+                return response;
+            }
+
+    // Default: serve as file download
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, meta.content_type.as_str())
@@ -374,7 +684,7 @@ pub async fn serve_download(
             header::CONTENT_DISPOSITION,
             format!(
                 "attachment; filename=\"{}\"",
-                meta.original_name.replace('\"', "\\\"")
+                meta.original_name.replace('"', "\\\"")
             ),
         )
         .header(header::CONTENT_LENGTH, meta.size_bytes)

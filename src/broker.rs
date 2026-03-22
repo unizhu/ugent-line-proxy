@@ -711,6 +711,7 @@ fn split_text(text: &str, max_len: usize) -> Vec<String> {
 pub async fn handle_file_download(
     axum::extract::State(broker): axum::extract::State<Arc<MessageBroker>>,
     axum::extract::Path(params): axum::extract::Path<crate::file_hosting::DownloadParams>,
+    headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
@@ -725,7 +726,12 @@ pub async fn handle_file_download(
         }
     };
 
-    crate::file_hosting::serve_download(&fh, &params.file, &params.code).await
+    let ua: Option<String> = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    crate::file_hosting::serve_download(&fh, &params.file, &params.code, ua.as_deref()).await
 }
 // =============================================================================
 #[cfg(test)]
