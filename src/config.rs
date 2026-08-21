@@ -17,6 +17,9 @@ pub enum ConfigError {
     #[error("Invalid bind address: {0}")]
     InvalidBindAddr(String),
 
+    #[error("{0}")]
+    Invalid(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -55,7 +58,7 @@ impl Config {
         let storage = StorageConfig::from_env();
         let file_hosting = FileHostingConfig::from_env();
 
-        Ok(Self {
+        let config = Self {
             server,
             line,
             websocket,
@@ -63,7 +66,23 @@ impl Config {
             logging,
             storage,
             file_hosting,
-        })
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Reject configurations that cannot be served safely.
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.websocket.api_key.is_empty() && !self.websocket.allow_anonymous_workers {
+            return Err(ConfigError::Invalid(
+                "LINE_PROXY_API_KEY is required — without it any client that can reach \
+                 the WebSocket endpoint receives every inbound message and can reply as \
+                 your LINE account. Set LINE_PROXY_ALLOW_ANONYMOUS_WORKERS=true only for \
+                 local testing."
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     /// Get the bind address as SocketAddr
@@ -240,6 +259,9 @@ pub struct WebSocketConfig {
     /// Maximum message size in bytes
     #[serde(default = "default_max_message_size")]
     pub max_message_size: usize,
+    /// Allow workers to connect without an API key. Testing only.
+    #[serde(default)]
+    pub allow_anonymous_workers: bool,
 }
 
 fn default_ws_path() -> String {
@@ -263,7 +285,15 @@ impl WebSocketConfig {
         let path = std::env::var("LINE_PROXY_WS_PATH").unwrap_or_else(|_| default_ws_path());
         let path = ensure_leading_slash(&path);
 
-        let api_key = std::env::var("LINE_PROXY_API_KEY").unwrap_or_default();
+        // Trim so a whitespace-only value counts as unset rather than as a
+        // configured key that can never match.
+        let api_key = std::env::var("LINE_PROXY_API_KEY")
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
+
+        let allow_anonymous_workers = std::env::var("LINE_PROXY_ALLOW_ANONYMOUS_WORKERS")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"))
+            .unwrap_or(false);
 
         let ping_interval_secs = std::env::var("LINE_PROXY_WS_PING_INTERVAL")
             .ok()
@@ -286,6 +316,7 @@ impl WebSocketConfig {
             ping_interval_secs,
             timeout_secs,
             max_message_size,
+            allow_anonymous_workers,
         }
     }
 
@@ -508,5 +539,32 @@ mod tests {
         assert!(default_true());
         assert_eq!(default_ping_interval(), 30);
         assert_eq!(default_cache_size(), 500);
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_a_missing_api_key_unless_anonymous_workers_are_allowed() {
+        let mut ws = WebSocketConfig {
+            path: "/ws".to_string(),
+            api_key: String::new(),
+            ping_interval_secs: 30,
+            timeout_secs: 60,
+            max_message_size: 1024,
+            allow_anonymous_workers: false,
+        };
+
+        // An empty key must not silently disable authentication.
+        assert!(ws.api_key.is_empty() && !ws.allow_anonymous_workers);
+
+        ws.allow_anonymous_workers = true;
+        assert!(ws.api_key.is_empty() && ws.allow_anonymous_workers);
+
+        ws.allow_anonymous_workers = false;
+        ws.api_key = "a-key".to_string();
+        assert!(ws.has_api_key());
     }
 }

@@ -51,10 +51,12 @@ async fn main() -> anyhow::Result<()> {
         warn!("Set LINE_CHANNEL_SECRET and LINE_CHANNEL_ACCESS_TOKEN");
     }
 
-    // Check API key configuration
+    // An unset API key is rejected by Config::validate unless the operator
+    // explicitly opted in, so reaching here with no key is a deliberate choice.
     if !config.websocket.has_api_key() {
-        warn!("No WebSocket API key configured - connections will not be authenticated!");
-        warn!("Set LINE_PROXY_API_KEY for production use");
+        warn!(
+            "LINE_PROXY_ALLOW_ANONYMOUS_WORKERS is set - WebSocket connections are NOT authenticated"
+        );
     }
 
     // Create WebSocket manager

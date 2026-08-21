@@ -693,14 +693,24 @@ async fn handle_socket(
 
 /// Authenticate client
 fn authenticate(data: &AuthData, config: &Config) -> bool {
-    // If no API key is configured, allow all connections (development mode)
+    // An empty configured key only reaches here when the operator explicitly
+    // set LINE_PROXY_ALLOW_ANONYMOUS_WORKERS; Config::validate refuses to start
+    // otherwise.
     if !config.websocket.has_api_key() {
-        warn!("No API key configured, allowing connection (development mode)");
+        warn!("No API key configured, allowing connection (anonymous workers enabled)");
         return true;
     }
 
-    // Verify API key
-    data.api_key == config.websocket.api_key
+    constant_time_eq(&data.api_key, &config.websocket.api_key)
+}
+
+/// Compare API keys without leaking their contents through timing.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    use subtle::ConstantTimeEq;
+    if a.len() != b.len() {
+        return false;
+    }
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 // =============================================================================
@@ -710,6 +720,14 @@ fn authenticate(data: &AuthData, config: &Config) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn constant_time_eq_compares_api_keys() {
+        assert!(constant_time_eq("secret", "secret"));
+        assert!(!constant_time_eq("secret", "Secret"));
+        assert!(!constant_time_eq("secret", "secre"));
+        assert!(!constant_time_eq("", "secret"));
+    }
 
     fn create_test_config() -> Arc<Config> {
         Arc::new(Config {
@@ -733,6 +751,7 @@ mod tests {
                 ping_interval_secs: 30,
                 timeout_secs: 60,
                 max_message_size: 10 * 1024 * 1024,
+                allow_anonymous_workers: false,
             },
             media: crate::config::MediaConfig::default(),
             logging: crate::config::LoggingConfig::default(),
