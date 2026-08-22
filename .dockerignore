@@ -1,0 +1,12 @@
+# Build artifacts must never enter the build context: the host target/ is
+# multiple gigabytes of the wrong architecture.
+target/
+dist/
+
+.git/
+.github/
+.env
+.DS_Store
+.vscode/
+.idea/
+logs/
